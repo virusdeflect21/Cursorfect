@@ -1,8 +1,8 @@
 [package]
 name = "cursorfect"
-version = "1.2.0"
+version = "1.0.0"
 edition = "2024"
-description = "Cursorfect - cinematic Sandevistan, The World and Made in Heaven effects for the real Windows cursor"
+description = "CursorFect - cinematic effects (Sandevistan and more) for the real Windows cursor"
 license = "MIT"
 build = "build.rs"
 

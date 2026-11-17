@@ -1,6 +1,5 @@
 //! Real desktop windows for The World: which ones can be grabbed during a time stop, and
 //! moving them (all at once) when time resumes.
-//! Dropped windows are raised in drop order to match the frozen preview.
 //!
 //! # HWND ownership
 //! The HWNDs belong to other processes. They are only stored as plain integers, re-validated
@@ -9,14 +8,12 @@
 //! elevated processes reject the move (UIPI); that failure is reported and skipped.
 
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
-use windows::Win32::Graphics::Dwm::{
-    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
-};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindow, IsWindowVisible,
-    IsZoomed, SW_RESTORE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-    SetWindowPos, ShowWindowAsync, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+    IsZoomed, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+    SetWindowPos, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::BOOL;
 
@@ -88,17 +85,22 @@ pub struct WindowFacts {
 }
 
 /// Shell surfaces that must never be dragged.
-const SHELL_CLASSES: [&str; 5] = [
+const SHELL_CLASSES: [&str; 6] = [
     "Progman",
     "WorkerW",
     "Shell_TrayWnd",
     "Shell_SecondaryTrayWnd",
+    "Windows.UI.Core.CoreWindow",
     "XamlExplorerHostIslandWindow",
 ];
 
 /// Ordinary, visible, movable application windows only.
 pub fn eligible(f: &WindowFacts) -> bool {
     if !f.visible || f.minimized || f.cloaked || f.own_process {
+        return false;
+    }
+    // Maximized windows fill the screen: moving one would just un-maximize it oddly.
+    if f.maximized {
         return false;
     }
     if f.tool_window && !f.app_window {
@@ -186,54 +188,37 @@ pub fn top_level_windows() -> Vec<WinInfo> {
     ctx.out
 }
 
-/// Convert a requested visible frame into the outer rectangle used by SetWindowPos.
-/// DWM frame bounds exclude invisible borders; preserve those offsets on each edge.
-fn outer_for_target(target: WinRect, outer: RECT, visible: RECT) -> (i32, i32, i32, i32) {
-    let left = (target.l - (visible.left - outer.left) as f32).round() as i32;
-    let top = (target.t - (visible.top - outer.top) as f32).round() as i32;
-    let right = (target.r + (outer.right - visible.right) as f32).round() as i32;
-    let bottom = (target.b + (outer.bottom - visible.bottom) as f32).round() as i32;
-    (left, top, right - left, bottom - top)
-}
-
-/// Place each window at its frozen preview position and raise it in drop order.
-/// Invalid or protected windows are skipped. Windows may reject placement requests.
-pub fn apply_moves(moves: &[(isize, WinRect)]) -> usize {
+/// Move windows by (dx, dy) pixels each, keeping size and Z-order. Returns how many moved.
+/// Invalid (closed) or protected windows are skipped.
+pub fn apply_moves(moves: &[(isize, f32, f32)]) -> usize {
     let mut done = 0;
-    for &(raw, target) in moves {
+    for &(raw, dx, dy) in moves {
+        if dx.abs() < 0.5 && dy.abs() < 0.5 {
+            continue;
+        }
         let hwnd = HWND(raw as *mut core::ffi::c_void);
+        // SAFETY: the handle is validated with IsWindow first; SetWindowPos with
+        // SWP_ASYNCWINDOWPOS never waits for the target thread.
         unsafe {
             if !IsWindow(Some(hwnd)).as_bool() {
                 tracing::info!("window {raw:#x} closed during the time stop; skipped");
                 continue;
             }
-            let mut outer = RECT::default();
-            if GetWindowRect(hwnd, &mut outer).is_err() {
+            let mut r = RECT::default();
+            if GetWindowRect(hwnd, &mut r).is_err() {
                 continue;
             }
-            let mut frame = RECT::default();
-            if DwmGetWindowAttribute(
+            let x = r.left + dx.round() as i32;
+            let y = r.top + dy.round() as i32;
+            match SetWindowPos(
                 hwnd,
-                DWMWA_EXTENDED_FRAME_BOUNDS,
-                (&mut frame as *mut RECT).cast(),
-                std::mem::size_of::<RECT>() as u32,
-            )
-            .is_err()
-            {
-                frame = outer;
-            }
-            let (x, y, width, height) = outer_for_target(target, outer, frame);
-            let mut flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS;
-            if IsZoomed(hwnd).as_bool() {
-                // Queue both operations to the target thread. Keep the preview size
-                // when restoring, instead of switching to its unrelated old size.
-                if !ShowWindowAsync(hwnd, SW_RESTORE).as_bool() {
-                    continue;
-                }
-            } else {
-                flags |= SWP_NOSIZE;
-            }
-            match SetWindowPos(hwnd, Some(HWND_TOP), x, y, width, height, flags) {
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+            ) {
                 Ok(()) => done += 1,
                 Err(e) => tracing::warn!("could not move window {raw:#x}: {e}"),
             }
@@ -281,6 +266,10 @@ mod tests {
                 own_process: true,
                 ..normal()
             },
+            WindowFacts {
+                maximized: true,
+                ..normal()
+            },
         ] {
             assert!(!eligible(&f), "{f:?}");
         }
@@ -314,44 +303,6 @@ mod tests {
             has_title: false,
             ..normal()
         }));
-    }
-
-    #[test]
-    fn maximized_and_uwp_apps_are_grabbable() {
-        assert!(eligible(&WindowFacts {
-            maximized: true,
-            ..normal()
-        }));
-        assert!(eligible(&WindowFacts {
-            class: "Windows.UI.Core.CoreWindow".into(),
-            ..normal()
-        }));
-    }
-
-    #[test]
-    fn target_uses_visible_frame_and_preserves_borders() {
-        let outer = RECT {
-            left: -108,
-            top: 92,
-            right: 708,
-            bottom: 708,
-        };
-        let visible = RECT {
-            left: -100,
-            top: 100,
-            right: 700,
-            bottom: 700,
-        };
-        let target = WinRect {
-            l: 250.0,
-            t: -50.0,
-            r: 1050.0,
-            b: 550.0,
-        };
-        assert_eq!(
-            outer_for_target(target, outer, visible),
-            (242, -58, 816, 616)
-        );
     }
 
     #[test]

@@ -63,11 +63,7 @@ fn init_logging() {
         Some(f) => builder.with_writer(Mutex::new(f)).init(),
         None => builder.init(),
     }
-    std::panic::set_hook(Box::new(|info| {
-        input::hooks::cancel_pointer_on_panic();
-        native::boost_mouse_speed(false);
-        tracing::error!("panic: {info}");
-    }));
+    std::panic::set_hook(Box::new(|info| tracing::error!("panic: {info}")));
 }
 
 fn show_window(ui: &MainWindow) {
@@ -92,28 +88,7 @@ fn main() -> anyhow::Result<()> {
             .get(i + 1)
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("cursorfect-render-test"));
-        let demo = if let Some(k) = args.iter().position(|a| a == "--demo-desktop") {
-            Some(std::path::Path::new(
-                args.get(k + 1).context("--demo-desktop needs a BMP path")?,
-            ))
-        } else {
-            None
-        };
-        return app::render_test_tw(&dir, args.iter().any(|a| a == "--measure"), demo);
-    }
-    if let Some(i) = args.iter().position(|a| a == "--render-test-mih") {
-        let dir = args
-            .get(i + 1)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join("cursorfect-mih-render-test"));
-        return app::render_test_mih(&dir, args.iter().any(|a| a == "--measure"));
-    }
-    if let Some(i) = args.iter().position(|a| a == "--ui-self-test") {
-        let dir = args
-            .get(i + 1)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join("cursorfect-ui-self-test"));
-        return ui::self_test(&dir);
+        return app::render_test_tw(&dir, args.iter().any(|a| a == "--measure"));
     }
     if let Some(i) = args.iter().position(|a| a == "--render-test") {
         let dir = args
@@ -122,10 +97,15 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| std::env::temp_dir().join("cursorfect-render-test"));
         return app::render_test(&dir);
     }
-    let Some(_instance) = native::SingleInstance::acquire_or_show() else {
+    let Some(_instance) = native::SingleInstance::acquire_or_replace() else {
         tracing::info!("another CursorFect instance did not quit; exiting");
         return Ok(());
     };
+    native::listen_for_quit(|| {
+        let _ = slint::invoke_from_event_loop(|| {
+            let _ = slint::quit_event_loop();
+        });
+    });
     let _timer = native::TimerResolution::new();
     native::restore_system_cursors();
     tracing::info!("CursorFect {} starting", env!("CARGO_PKG_VERSION"));
@@ -138,12 +118,9 @@ fn main() -> anyhow::Result<()> {
     let hooks = HookShared::new(
         tx.clone(),
         Bindings {
-            activation: settings.active_shortcut(),
+            activation: settings.activation,
             dash: settings.dash,
             consume_mouse: settings.consume_mouse_buttons,
-            dash_enabled: settings.effect != config::EffectKind::MadeInHeaven,
-            release_on_modifier_up: settings.effect == config::EffectKind::MadeInHeaven
-                && settings.made_in_heaven.mode == config::TimeStopMode::Hold,
         },
     );
     // A failed hook install leaves the app usable (settings window, tray), just without global shortcuts.
@@ -197,7 +174,6 @@ fn main() -> anyhow::Result<()> {
             }
             UiMsg::Notice(text) => ui.set_notice(text.into()),
             UiMsg::SoundInfo(text) => ui.set_parts_text(text.into()),
-            UiMsg::MihSoundInfo(text) => ui.set_mih_parts_text(text.into()),
         });
     });
 
@@ -261,14 +237,6 @@ fn main() -> anyhow::Result<()> {
     }
     {
         let tx = tx.clone();
-        ui.on_mih_preview(move |which| {
-            let _ = tx.send(Msg::Cmd(Cmd::MihPreview(audio::mih::MihSound::from_index(
-                which,
-            ))));
-        });
-    }
-    {
-        let tx = tx.clone();
         ui.on_reset_defaults(move || {
             let _ = tx.send(Msg::Cmd(Cmd::ResetDefaults));
         });
@@ -278,32 +246,6 @@ fn main() -> anyhow::Result<()> {
         ui.on_minimize_tray(move || {
             if let Some(ui) = weak.upgrade() {
                 let _ = ui.hide();
-            }
-        });
-    }
-    {
-        let weak = ui.as_weak();
-        let tx = tx.clone();
-        ui.on_choose_custom_sound(move |which| {
-            use std::os::windows::process::CommandExt;
-            let Some(name) = ["custom_stop.mp3", "custom_tick.mp3", "custom_resume.mp3"].get(which as usize) else { return; };
-            let result = std::process::Command::new("powershell.exe")
-                .args(["-NoProfile", "-STA", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = 'MP3 audio (*.mp3)|*.mp3'; $d.Title = 'Choose a sound'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($d.FileName) }"])
-                .creation_flags(0x08000000)
-                .output();
-            let selected = match result { Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_owned(), _ => String::new() };
-            if selected.is_empty() { return; }
-            let result = audio::engine::sound_dirs().into_iter().next().ok_or_else(|| "Sound folder unavailable".to_string()).and_then(|dir| {
-                let dir = dir.join("theworld");
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                std::fs::copy(&selected, dir.join(name)).map_err(|e| e.to_string())?;
-                Ok(())
-            });
-            if let Some(ui) = weak.upgrade() {
-                match result {
-                    Ok(()) => { let _ = tx.send(Msg::Cmd(Cmd::ReloadSounds)); ui.set_notice(format!("Loaded {}", selected).into()); }
-                    Err(e) => ui.set_notice(format!("Could not load sound: {e}").into()),
-                }
             }
         });
     }
@@ -319,10 +261,10 @@ fn main() -> anyhow::Result<()> {
             let _ = std::process::Command::new("explorer").arg(d).spawn();
         }
     });
+    // Closing the window keeps the app running in the tray.
+    // Closing the window quits (shutting effects down cleanly); "Hide to tray" keeps it running.
     ui.window().on_close_requested(|| {
-        if !TRAY.with(|t| t.borrow().is_some()) {
-            let _ = slint::quit_event_loop();
-        }
+        let _ = slint::quit_event_loop();
         slint::CloseRequestResponse::HideWindow
     });
 
@@ -357,15 +299,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let weak = ui.as_weak();
-    native::listen_for_show(move || {
-        let weak = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                show_window(&ui);
-            }
-        });
-    });
     let tray_ok = TRAY.with(|t| t.borrow().is_some());
     if start_minimized && tray_ok {
         tracing::info!("starting minimized to tray");
@@ -383,7 +316,6 @@ fn main() -> anyhow::Result<()> {
     }
     TRAY.with(|t| *t.borrow_mut() = None);
     native::restore_system_cursors();
-    native::boost_mouse_speed(false);
     drop(ui);
     Ok(())
 }

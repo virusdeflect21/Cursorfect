@@ -10,11 +10,6 @@ pub enum SysState {
     Overheated,
     /// The World: time is stopped (or stopping / resuming).
     TimeStopped,
-    Awakening,
-    TimeAccelerating,
-    HeavenAscended,
-    UniverseReset,
-    Decelerating,
 }
 
 impl SysState {
@@ -25,24 +20,7 @@ impl SysState {
             SysState::Active => "ACTIVE",
             SysState::Overheated => "OVERHEATED",
             SysState::TimeStopped => "TIME STOPPED",
-            SysState::Awakening => "AWAKENING",
-            SysState::TimeAccelerating => "TIME ACCELERATION",
-            SysState::HeavenAscended => "HEAVEN ASCENDED",
-            SysState::UniverseReset => "UNIVERSE RESET",
-            SysState::Decelerating => "DECELERATING",
         }
-    }
-
-    pub fn is_effect_active(self) -> bool {
-        matches!(
-            self,
-            Self::Active
-                | Self::Awakening
-                | Self::TimeAccelerating
-                | Self::HeavenAscended
-                | Self::UniverseReset
-                | Self::Decelerating
-        )
     }
 }
 

@@ -6,7 +6,6 @@ component SliderRow inherits VerticalLayout {
     in property <string> suffix: "%";
     in property <float> minimum: 0;
     in property <float> maximum: 100;
-    in property <bool> fractional: false;
     in-out property <float> value;
     callback edited();
     spacing: 2px;
@@ -17,7 +16,7 @@ component SliderRow inherits VerticalLayout {
         }
         Rectangle { }
         Text {
-            text: "\{root.fractional ? Math.round(root.value * 10) / 10 : Math.round(root.value)}\{root.suffix}";
+            text: "\{Math.round(root.value)}\{root.suffix}";
             opacity: 0.65;
             vertical-alignment: center;
         }
@@ -114,7 +113,7 @@ component EffectChip inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "Cursorfect";
+    title: "CursorFect";
     preferred-width: 500px;
     preferred-height: 720px;
     min-width: 400px;
@@ -126,7 +125,6 @@ export component MainWindow inherits Window {
     in property <string> version: "";
 
     in-out property <bool> master-on: false;
-    in-out property <bool> mouse-boost: false;
     in property <string> activation-text: "Middle Click";
     in property <string> dash-text: "Ctrl + Middle Click";
     in property <int> recording: 0;
@@ -145,9 +143,6 @@ export component MainWindow inherits Window {
     in-out property <int> tw-mode: 1;
     in-out property <float> tw-duration: 5;
     in-out property <int> tw-dub: 0;
-    in-out property <float> tw-windup: -1;
-    in-out property <string> tw-custom-primary: "#E95BFF";
-    in-out property <string> tw-custom-secondary: "#6037C8";
     in-out property <bool> tw-voice: true;
     in-out property <bool> tw-sfx: true;
     in-out property <bool> tw-ticks: true;
@@ -163,30 +158,11 @@ export component MainWindow inherits Window {
     in-out property <bool> tw-streaks: true;
     in-out property <bool> tw-flare: true;
     in-out property <bool> tw-rays: true;
-    in-out property <bool> mih-enabled: true;
-    in-out property <int> mih-mode: 1;
-    in-out property <float> mih-duration: 20;
-    in-out property <bool> mih-real: true;
-    in-out property <bool> mih-repeat: false;
-    in-out property <float> mih-maximum: 4;
-    in-out property <float> mih-ramp: 20;
-    in-out property <float> mih-deceleration: 1.5;
-    in-out property <float> mih-reset-duration: 1.5;
-    in-out property <bool> mih-ghosts: true;
-    in-out property <bool> mih-trails: true;
-    in-out property <bool> mih-particles: true;
-    in-out property <bool> mih-aura: true;
-    in-out property <bool> mih-flash: true;
-    in-out property <bool> mih-indicator: true;
-    in-out property <float> mih-intensity: 80;
-    in-out property <bool> mih-sfx: true;
-    in-out property <float> mih-volume: 100;
-    in property <string> mih-parts-text: "Loading MIH sounds\u{2026}";
     in-out property <bool> fx-ripples: true;
     in-out property <bool> fx-glitch: true;
     in-out property <bool> fx-bursts: true;
-    property <color> accent: root.effect == 2 ? #EAFDFF : root.effect == 1 ? (root.tw-dub == 4 ? #F4F9FF : root.tw-dub == 1 || root.tw-dub == 2 ? #398EFF : root.tw-dub == 3 ? #FFA323 : root.gold) : root.primary-color;
-    property <color> accent2: root.effect == 2 ? #48DFFF : root.effect == 1 ? (root.tw-dub == 4 ? #9FB7DE : root.tw-dub == 1 || root.tw-dub == 2 ? #243DAD : root.tw-dub == 3 ? #B9580C : root.violet) : root.secondary-color;
+    property <color> accent: root.effect == 1 ? root.gold : root.primary-color;
+    property <color> accent2: root.effect == 1 ? root.violet : root.secondary-color;
     in-out property <bool> fx-ghosts: true;
     in-out property <bool> fx-trails: true;
     in-out property <bool> fx-glow: true;
@@ -227,11 +203,9 @@ export component MainWindow inherits Window {
     callback record(int);
     callback preview(int);
     callback tw-preview(int);
-    callback mih-preview(int);
     callback reset-defaults();
     callback minimize-tray();
     callback open-sounds();
-    callback choose-custom-sound(int);
 
     ScrollView {
         VerticalLayout {
@@ -242,8 +216,8 @@ export component MainWindow inherits Window {
             Rectangle {
                 height: 78px;
                 border-radius: 10px;
-                background: root.effect != 0
-                    ? @linear-gradient(120deg, #101014 0%, root.accent2.with-alpha(0.28) 55%, root.accent.with-alpha(0.30) 100%)
+                background: root.effect == 1
+                    ? @linear-gradient(120deg, #101014 0%, #1B1B23 55%, #2A2140 100%)
                     : @linear-gradient(120deg, #0B0F17 0%, #10202B 55%, #0E2A24 100%);
                 // Accent line in the current preset colours.
                 Rectangle {
@@ -270,7 +244,7 @@ export component MainWindow inherits Window {
                                 color: #FFFFFF;
                             }
                             Text {
-                                text: "fect";
+                                text: "Fect";
                                 font-size: 24px;
                                 font-weight: 800;
                                 color: root.accent;
@@ -321,10 +295,8 @@ export component MainWindow inherits Window {
 
             // ---- Effect picker (more effects will appear here)
             GroupBox {
-                title: "✦ Effect";
-                VerticalLayout {
-                    spacing: 8px;
-                    HorizontalLayout {
+                title: "Effect";
+                HorizontalLayout {
                     spacing: 8px;
                     EffectChip {
                         title: "Sandevistan";
@@ -340,19 +312,11 @@ export component MainWindow inherits Window {
                         title: "The World";
                         subtitle: "Stop time, move windows";
                         selected: root.effect == 1;
-                        accent: root.accent;
+                        accent: root.gold;
                         clicked => {
                             root.effect = 1;
                             root.changed();
                         }
-                    }
-                    }
-                    EffectChip {
-                        title: "Made in Heaven";
-                        subtitle: "Progressive time acceleration · Universe Reset";
-                        selected: root.effect == 2;
-                        accent: #48DFFF;
-                        clicked => { root.effect = 2; root.changed(); }
                     }
                 }
             }
@@ -385,39 +349,6 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if root.effect == 2: VerticalLayout {
-                        spacing: 8px;
-                        OptSwitch {
-                            text: "Enable Made in Heaven";
-                            checked <=> root.mih-enabled;
-                            edited => { root.changed(); }
-                        }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: "Mode"; width: 80px; vertical-alignment: center; }
-                            ComboBox {
-                                model: ["Hold (active while held)", "Toggle (press to turn on/off)", "Timed (ends automatically)"];
-                                current-index <=> root.mih-mode;
-                                selected(v) => { root.changed(); }
-                            }
-                        }
-                        if root.mih-mode == 2: SliderRow {
-                            label: "Timed activation limit"; suffix: " s";
-                            minimum: 1; maximum: 300;
-                            value <=> root.mih-duration;
-                            edited => { root.changed(); }
-                        }
-                        OptSwitch {
-                            text: "Enable real cursor acceleration";
-                            checked <=> root.mih-real;
-                            edited => { root.changed(); }
-                        }
-                        OptSwitch {
-                            text: "Repeat acceleration after Universe Reset";
-                            checked <=> root.mih-repeat;
-                            edited => { root.changed(); }
-                        }
-                    }
                     Switch {
                         text: "Block the bound mouse button's normal action (autoscroll, back/forward)";
                         checked <=> root.consume-mouse;
@@ -433,9 +364,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     Text {
-                        text: root.effect == 2
-                            ? "Uses its own shortcut. The other effects and warp dash stay off. Real acceleration multiplies desktop pointer movement, not game raw input, and never changes Windows sensitivity. Emergency off: Ctrl + Alt + Shift + F12"
-                            : root.effect == 1
+                        text: root.effect == 1
                             ? "Middle click stops time with The World (the Sandevistan stays off). Emergency resume: Ctrl + Alt + Shift + F12"
                             : "Middle click turns on the Sandevistan (The World stays off). Emergency off: Ctrl + Alt + Shift + F12";
                         wrap: word-wrap;
@@ -446,7 +375,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "♫ Sound";
+                title: "Sound";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
@@ -480,37 +409,11 @@ export component MainWindow inherits Window {
                         font-size: 11px;
                     }
                     SliderRow {
-                        label: root.effect == 2 ? "Master volume" : "Volume";
+                        label: "Volume";
                         value <=> root.volume;
                         edited => {
                             root.changed();
                         }
-                    }
-                    if root.effect == 2: VerticalLayout {
-                        spacing: 8px;
-                        OptSwitch {
-                            text: "Enable MIH SFX";
-                            checked <=> root.mih-sfx;
-                            edited => { root.changed(); }
-                        }
-                        SliderRow {
-                            label: "MIH volume (relative to master)";
-                            value <=> root.mih-volume;
-                            edited => { root.changed(); }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Test sounds"; vertical-alignment: center; }
-                            Button { text: "Activation"; clicked => { root.mih-preview(0); } }
-                            Button { text: "Accelerate"; clicked => { root.mih-preview(1); } }
-                            Button { text: "Reset"; clicked => { root.mih-preview(3); } }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Button { text: "Maximum (if present)"; clicked => { root.mih-preview(2); } }
-                            Button { text: "Deactivation (if present)"; clicked => { root.mih-preview(4); } }
-                        }
-                        Text { text: root.mih-parts-text; wrap: word-wrap; opacity: 0.6; font-size: 11px; }
                     }
                     if root.effect == 0 && root.sound-mode == 0: SliderRow {
                         label: "Movement sound";
@@ -601,7 +504,7 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         ComboBox {
-                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)", "Custom time stop"];
+                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)"];
                             current-index <=> root.tw-dub;
                             selected(v) => {
                                 root.changed();
@@ -694,7 +597,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 1: GroupBox {
-                title: "◷ Time stop";
+                title: "Time stop";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -711,31 +614,6 @@ export component MainWindow inherits Window {
                                 root.changed();
                             }
                         }
-                    }
-                    SliderRow {
-                        label: "Wind-up (-1 = automatic)";
-                        suffix: " s";
-                        minimum: -1;
-                        maximum: 15;
-                        value <=> root.tw-windup;
-                        edited => { root.changed(); }
-                    }
-                    if root.tw-dub == 6: VerticalLayout {
-                        spacing: 6px;
-                        Text { text: "Custom colors (#RRGGBB)"; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            LineEdit { text <=> root.tw-custom-primary; edited(t) => { root.changed(); } }
-                            LineEdit { text <=> root.tw-custom-secondary; edited(t) => { root.changed(); } }
-                        }
-                        Text { text: "Choose MP3 sounds from your PC:"; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Button { text: "♪ Stop sound"; clicked => { root.choose-custom-sound(0); } }
-                            Button { text: "◷ Tick sound"; clicked => { root.choose-custom-sound(1); } }
-                            Button { text: "▶ Resume sound"; clicked => { root.choose-custom-sound(2); } }
-                        }
-                        Text { text: "Selected files are copied to your sounds folder and loaded immediately."; wrap: word-wrap; opacity: 0.65; }
                     }
                     if root.tw-mode == 2: SliderRow {
                         label: "Duration";
@@ -846,61 +724,8 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if root.effect == 2: GroupBox {
-                title: "◷ Acceleration";
-                VerticalLayout {
-                    spacing: 8px;
-                    SliderRow {
-                        label: "Maximum speed multiplier"; suffix: "×"; fractional: true;
-                        minimum: 1; maximum: 6; value <=> root.mih-maximum;
-                        edited => { root.changed(); }
-                    }
-                    SliderRow {
-                        label: "Ramp-up duration"; suffix: " s";
-                        minimum: 5; maximum: 120; value <=> root.mih-ramp;
-                        edited => { root.changed(); }
-                    }
-                    SliderRow {
-                        label: "Deceleration duration"; suffix: " s"; fractional: true;
-                        minimum: 0.2; maximum: 5; value <=> root.mih-deceleration;
-                        edited => { root.changed(); }
-                    }
-                    SliderRow {
-                        label: "Universe Reset duration"; suffix: " s"; fractional: true;
-                        minimum: 0.2; maximum: 5; value <=> root.mih-reset-duration;
-                        edited => { root.changed(); }
-                    }
-                    Text {
-                        text: "Starts at 1×, gradually accelerates, then resets. Manually turning it off decelerates smoothly; master off or emergency off restores normal input immediately.";
-                        wrap: word-wrap; opacity: 0.6; font-size: 11px;
-                    }
-                }
-            }
-
-            if root.effect == 2: GroupBox {
-                title: "✦ Heaven visuals";
-                VerticalLayout {
-                    spacing: 8px;
-                    OptSwitch { text: "White / cyan afterimages"; checked <=> root.mih-ghosts; edited => { root.changed(); } }
-                    OptSwitch { text: "Accelerating motion trails & speed streaks"; checked <=> root.mih-trails; edited => { root.changed(); } }
-                    OptSwitch { text: "Speed particles"; checked <=> root.mih-particles; edited => { root.changed(); } }
-                    OptSwitch { text: "Heaven aura & energy pulses"; checked <=> root.mih-aura; edited => { root.changed(); } }
-                    OptSwitch { text: "Universe Reset flash"; checked <=> root.mih-flash; edited => { root.changed(); } }
-                    OptSwitch { text: "Compact acceleration indicator"; checked <=> root.mih-indicator; edited => { root.changed(); } }
-                    OptSwitch { text: "HDR bloom"; checked <=> root.fx-bloom; edited => { root.changed(); } }
-                    SliderRow {
-                        label: "Effect intensity"; value <=> root.mih-intensity;
-                        edited => { root.changed(); }
-                    }
-                    Text {
-                        text: "Awakening → Time Acceleration → Heaven Ascended. The overlay stays click-through; the reset never changes your desktop, windows or system time.";
-                        wrap: word-wrap; opacity: 0.6; font-size: 11px;
-                    }
-                }
-            }
-
             if root.effect == 0: GroupBox {
-                title: "✦ Look";
+                title: "Look";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -1040,11 +865,6 @@ export component MainWindow inherits Window {
                             root.changed();
                         }
                     }
-                    Switch {
-                        text: "Boost mouse pointer speed while active";
-                        checked <=> root.mouse-boost;
-                        toggled => { root.changed(); }
-                    }
                     SliderRow {
                         label: "Intensity";
                         value <=> root.intensity;
@@ -1115,7 +935,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "⚙ System";
+                title: "System";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {

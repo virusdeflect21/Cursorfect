@@ -35,6 +35,10 @@ fn main() {
     for (i, chunk) in samples.chunks(win * ch).enumerate() {
         let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len().max(1) as f32).sqrt();
         let bar = "#".repeat((rms * 120.0) as usize);
-        println!("{:6.2}s {:.3} {bar}", (i * win) as f32 / rate as f32, rms);
+        println!(
+            "{:6.2}s {:.3} {bar}",
+            (i * win) as f32 / rate as f32,
+            rms
+        );
     }
 }

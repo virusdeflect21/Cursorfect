@@ -45,22 +45,15 @@ pub fn status_color(s: SysState) -> Color {
         SysState::Active => Color::from_rgb_u8(0x22, 0xC5, 0x5E),
         SysState::Overheated => Color::from_rgb_u8(0xFF, 0x7A, 0x59),
         SysState::TimeStopped => Color::from_rgb_u8(0xE9, 0xC4, 0x6A),
-        SysState::Awakening
-        | SysState::TimeAccelerating
-        | SysState::HeavenAscended
-        | SysState::UniverseReset
-        | SysState::Decelerating => Color::from_rgb_u8(0x60, 0xE7, 0xFF),
     }
 }
 
 /// Push every setting into the window's properties.
 pub fn apply_settings(ui: &MainWindow, s: &Settings) {
     ui.set_master_on(s.master_enabled);
-    ui.set_mouse_boost(s.mouse_boost);
     ui.set_effect(match s.effect {
         EffectKind::Sandevistan => 0,
         EffectKind::TheWorld => 1,
-        EffectKind::MadeInHeaven => 2,
     });
     ui.set_sv_start(s.audio.sv_start);
     ui.set_sv_move(s.audio.sv_move);
@@ -74,9 +67,6 @@ pub fn apply_settings(ui: &MainWindow, s: &Settings) {
     });
     ui.set_tw_duration(f32::from(t.duration_secs));
     ui.set_tw_dub(t.dub.index());
-    ui.set_tw_windup(t.windups[t.dub.index() as usize]);
-    ui.set_tw_custom_primary(t.custom_primary.clone().into());
-    ui.set_tw_custom_secondary(t.custom_secondary.clone().into());
     ui.set_tw_voice(t.voice);
     ui.set_tw_sfx(t.stop_sfx);
     ui.set_tw_ticks(t.ticks);
@@ -92,33 +82,10 @@ pub fn apply_settings(ui: &MainWindow, s: &Settings) {
     ui.set_tw_streaks(t.streaks);
     ui.set_tw_flare(t.flare);
     ui.set_tw_rays(t.rays);
-    let mih = &s.made_in_heaven;
-    ui.set_mih_enabled(mih.enabled);
-    ui.set_mih_mode(match mih.mode {
-        TimeStopMode::Hold => 0,
-        TimeStopMode::Toggle => 1,
-        TimeStopMode::Timed => 2,
-    });
-    ui.set_mih_duration(mih.duration_secs);
-    ui.set_mih_real(mih.real_acceleration);
-    ui.set_mih_repeat(mih.repeat_after_reset);
-    ui.set_mih_maximum(mih.max_multiplier);
-    ui.set_mih_ramp(mih.ramp_up_secs);
-    ui.set_mih_deceleration(mih.deceleration_secs);
-    ui.set_mih_reset_duration(mih.reset_secs);
-    ui.set_mih_ghosts(mih.afterimages);
-    ui.set_mih_trails(mih.motion_trails);
-    ui.set_mih_particles(mih.speed_particles);
-    ui.set_mih_aura(mih.heaven_aura);
-    ui.set_mih_flash(mih.reset_flash);
-    ui.set_mih_indicator(mih.indicator);
-    ui.set_mih_intensity(f32::from(mih.intensity));
-    ui.set_mih_sfx(mih.sfx);
-    ui.set_mih_volume(f32::from(mih.volume));
     ui.set_fx_ripples(s.effects.ripples);
     ui.set_fx_glitch(s.effects.glitch);
     ui.set_fx_bursts(s.effects.speed_bursts);
-    ui.set_activation_text(s.active_shortcut().display().into());
+    ui.set_activation_text(s.activation.display().into());
     ui.set_dash_text(s.dash.display().into());
     ui.set_hold_mode(s.activation_mode == ActivationMode::Hold);
     ui.set_consume_mouse(s.consume_mouse_buttons);
@@ -173,10 +140,10 @@ pub fn apply_status(ui: &MainWindow, state: SysState, energy_pct: f32, recording
 pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
     let mut s = base.clone();
     s.master_enabled = ui.get_master_on();
-    s.effect = match ui.get_effect() {
-        1 => EffectKind::TheWorld,
-        2 => EffectKind::MadeInHeaven,
-        _ => EffectKind::Sandevistan,
+    s.effect = if ui.get_effect() == 1 {
+        EffectKind::TheWorld
+    } else {
+        EffectKind::Sandevistan
     };
     s.audio.sv_start = ui.get_sv_start();
     s.audio.sv_move = ui.get_sv_move();
@@ -189,14 +156,7 @@ pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
         _ => TimeStopMode::Toggle,
     };
     t.duration_secs = ui.get_tw_duration().round().clamp(1.0, 9.0) as u8;
-    let old_dub = t.dub;
-    let new_dub = Dub::from_index(ui.get_tw_dub());
-    if old_dub == new_dub {
-        t.windups[new_dub.index() as usize] = ui.get_tw_windup().clamp(-1.0, 15.0);
-    }
-    t.dub = new_dub;
-    t.custom_primary = ui.get_tw_custom_primary().to_string();
-    t.custom_secondary = ui.get_tw_custom_secondary().to_string();
+    t.dub = Dub::from_index(ui.get_tw_dub());
     t.voice = ui.get_tw_voice();
     t.stop_sfx = ui.get_tw_sfx();
     t.ticks = ui.get_tw_ticks();
@@ -212,31 +172,6 @@ pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
     t.streaks = ui.get_tw_streaks();
     t.flare = ui.get_tw_flare();
     t.rays = ui.get_tw_rays();
-    let mih = &mut s.made_in_heaven;
-    mih.enabled = ui.get_mih_enabled();
-    mih.mode = match ui.get_mih_mode() {
-        0 => TimeStopMode::Hold,
-        2 => TimeStopMode::Timed,
-        _ => TimeStopMode::Toggle,
-    };
-    mih.duration_secs = ui.get_mih_duration();
-    mih.real_acceleration = ui.get_mih_real();
-    mih.repeat_after_reset = ui.get_mih_repeat();
-    mih.max_multiplier = ui.get_mih_maximum();
-    mih.ramp_up_secs = ui.get_mih_ramp();
-    mih.deceleration_secs = ui.get_mih_deceleration();
-    mih.reset_secs = ui.get_mih_reset_duration();
-    mih.afterimages = ui.get_mih_ghosts();
-    mih.motion_trails = ui.get_mih_trails();
-    mih.speed_particles = ui.get_mih_particles();
-    mih.heaven_aura = ui.get_mih_aura();
-    mih.reset_flash = ui.get_mih_flash();
-    mih.indicator = ui.get_mih_indicator();
-    mih.intensity = ui.get_mih_intensity().round().clamp(0.0, 100.0) as u8;
-    mih.sfx = ui.get_mih_sfx();
-    mih.volume = ui.get_mih_volume().round().clamp(0.0, 100.0) as u8;
-    mih.sanitize();
-    s.mouse_boost = ui.get_mouse_boost();
     s.effects.ripples = ui.get_fx_ripples();
     s.effects.glitch = ui.get_fx_glitch();
     s.effects.speed_bursts = ui.get_fx_bursts();
@@ -288,118 +223,5 @@ pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
         .unwrap_or(0);
     s.startup.start_with_windows = ui.get_startup_on();
     apply_preview_colors(ui, &s);
-    // The two legacy effects share their existing shortcut; MIH has its own.
-    // Update the displayed binding immediately when the effect chip changes.
-    ui.set_activation_text(s.active_shortcut().display().into());
     s
-}
-
-/// Native Slint diagnostic: round-trip controls for all three effects, verify
-/// the real tray menu, and save this application's own UI snapshot. No input
-/// hooks/audio engine are started and the user's configuration is not loaded/saved.
-pub fn self_test(dir: &std::path::Path) -> anyhow::Result<()> {
-    use slint::ComponentHandle;
-    std::fs::create_dir_all(dir)?;
-    let ui = MainWindow::new()?;
-    ui.set_version(env!("CARGO_PKG_VERSION").into());
-    let mut settings = Settings {
-        activation: crate::input::shortcuts::Shortcut::key(
-            120,
-            crate::input::shortcuts::Modifiers::NONE,
-        ),
-        made_in_heaven: crate::settings::config::MadeInHeavenSettings {
-            activation: crate::input::shortcuts::Shortcut::key(
-                119,
-                crate::input::shortcuts::Modifiers::NONE,
-            ),
-            max_multiplier: 3.7,
-            ramp_up_secs: 36.0,
-            deceleration_secs: 0.8,
-            volume: 42,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    for effect in [
-        EffectKind::Sandevistan,
-        EffectKind::TheWorld,
-        EffectKind::MadeInHeaven,
-    ] {
-        settings.effect = effect;
-        apply_settings(&ui, &settings);
-        let read = read_settings(&ui, &settings);
-        anyhow::ensure!(read == settings, "UI round-trip mismatch for {effect:?}");
-        anyhow::ensure!(
-            ui.get_activation_text().as_str() == settings.active_shortcut().display(),
-            "UI displayed the wrong shortcut for {effect:?}"
-        );
-    }
-    // Exercise selector feedback with distinct bindings, then show the original
-    // controls/style with MIH selected. This is not a desktop screenshot.
-    settings.effect = EffectKind::Sandevistan;
-    apply_settings(&ui, &settings);
-    ui.set_effect(2);
-    let selected = read_settings(&ui, &settings);
-    anyhow::ensure!(
-        selected.effect == EffectKind::MadeInHeaven && selected.activation == settings.activation,
-        "selecting MIH changed the legacy shortcut"
-    );
-    anyhow::ensure!(
-        ui.get_activation_text().as_str() == selected.made_in_heaven.activation.display(),
-        "selector did not refresh MIH's binding"
-    );
-    ui.set_mih_parts_text("Activation: made-in-heaven-summon-start.mp3\nAcceleration: time-accelerate.mp3\nUniverse Reset: universe-reset.mp3\nOptional maximum/deactivation: silent if absent".into());
-    apply_status(&ui, SysState::Offline, 100.0, 0);
-    let tray = crate::platform::tray::Tray::create(|_| {})?;
-    tray.self_test()?;
-    let result = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let captured = result.clone();
-    let weak = ui.as_weak();
-    let path = dir.join("settings-mih.bmp");
-    slint::Timer::single_shot(std::time::Duration::from_millis(350), move || {
-        let capture = (|| -> anyhow::Result<()> {
-            let ui = weak
-                .upgrade()
-                .ok_or_else(|| anyhow::anyhow!("diagnostic window disappeared"))?;
-            let image = ui.window().take_snapshot()?;
-            let width = image.width();
-            let height = image.height();
-            let row = (width as usize * 3).div_ceil(4) * 4;
-            let mut bmp = vec![0u8; 54 + row * height as usize];
-            let length = bmp.len() as u32;
-            bmp[0..2].copy_from_slice(b"BM");
-            bmp[2..6].copy_from_slice(&length.to_le_bytes());
-            bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
-            bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
-            bmp[18..22].copy_from_slice(&width.to_le_bytes());
-            bmp[22..26].copy_from_slice(&height.to_le_bytes());
-            bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
-            bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
-            for y in 0..height as usize {
-                for x in 0..width as usize {
-                    let source = (y * width as usize + x) * 4;
-                    let target = 54 + (height as usize - 1 - y) * row + x * 3;
-                    let rgba = &image.as_bytes()[source..source + 4];
-                    bmp[target..target + 3].copy_from_slice(&[rgba[2], rgba[1], rgba[0]]);
-                }
-            }
-            std::fs::write(path, bmp)?;
-            Ok(())
-        })();
-        *captured.borrow_mut() = Some(capture);
-        let _ = slint::quit_event_loop();
-    });
-    ui.show()?;
-    slint::run_event_loop_until_quit()?;
-    let _ = ui.hide();
-    drop(tray);
-    result
-        .borrow_mut()
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("UI diagnostic did not complete"))??;
-    std::fs::write(
-        dir.join("ui-test.txt"),
-        "Native UI/tray diagnostic passed: all three effect settings round-trip, independent shortcuts, immediate selector feedback, MIH tray activation/deactivation labels and master state. No user settings changed.",
-    )?;
-    Ok(())
 }

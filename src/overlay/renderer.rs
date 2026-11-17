@@ -27,6 +27,8 @@
 use anyhow::{Context, anyhow};
 use glam::Vec2;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, HWND};
+use windows::Win32::Graphics::Dwm::DwmFlush;
+use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0,
@@ -49,7 +51,6 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
-use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM,
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32_FLOAT,
@@ -59,12 +60,11 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
     DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_PRESENT, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
-    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
-    IDXGIDevice1, IDXGIFactory2, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
-    IDXGISwapChain1, IDXGISwapChain2,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, IDXGIAdapter, IDXGIDevice, IDXGIDevice1,
+    IDXGIFactory2, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, IDXGISwapChain1,
+    IDXGISwapChain2,
 };
-use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::core::{Interface, PCSTR, s};
 
 use crate::effects::{Batch, Look, MODE_DESKTOP, MODE_SOLID, Vertex, World};
@@ -81,8 +81,6 @@ cbuffer Frame : register(b0) {
     float4 g3;   // xy = ripple centre offset from the wave centre (px), z = draw alpha,
                  // w = look (0 Sandevistan, 1 The World)
     float4 g4;   // The World: x = inversion sphere radius (px), y = flash, z = tint, w = chroma
-    float4 g5;   // primary time-stop colour
-    float4 g6;   // secondary time-stop colour
 };
 
 Texture2D cursorTex : register(t0);
@@ -191,8 +189,8 @@ float4 world_pass(PSIn i) {
         // highlights, a colour-inverting sphere, golden flash.
         float3 col = float3(cr.r, c.g, cb.b) + shimmer * 0.015;
         float l = luma(col);
-        float3 shadowTone = g6.rgb * 0.36;
-        float3 highTone = lerp(g5.rgb, float3(1.0, 1.0, 1.0), 0.18);
+        float3 shadowTone = float3(0.20, 0.12, 0.36);
+        float3 highTone = float3(1.0, 0.87, 0.56);
         float3 tone = lerp(shadowTone, highTone, smoothstep(0.03, 0.95, l)) * (0.30 + 0.85 * l);
         float3 desat = lerp(col, float3(l, l, l), 0.9);
         float3 graded = lerp(desat, tone, 0.75 * g4.z);
@@ -207,7 +205,7 @@ float4 world_pass(PSIn i) {
             neg = lerp(neg, neg * float3(0.78, 0.92, 1.12), 0.6);
             outc = lerp(outc, neg, inside);
         }
-        outc = lerp(outc, lerp(g5.rgb, float3(1.0, 1.0, 1.0), 0.2), saturate(g4.y));
+        outc = lerp(outc, float3(1.0, 0.88, 0.55), saturate(g4.y));
         outc += n * g1.w * film * 0.045;
         float a = g3.z;
         return float4(saturate(outc) * a, a);
@@ -392,8 +390,6 @@ struct FrameConsts {
     g2: [f32; 4],
     g3: [f32; 4],
     g4: [f32; 4],
-    g5: [f32; 4],
-    g6: [f32; 4],
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1194,8 +1190,14 @@ impl Renderer {
     fn set_consts(&self, c: &FrameConsts) {
         // SAFETY: `c` is a live #[repr(C)] struct of exactly the buffer's size.
         unsafe {
-            self.ctx
-                .UpdateSubresource(&self.cbuf, 0, None, (c as *const FrameConsts).cast(), 0, 0);
+            self.ctx.UpdateSubresource(
+                &self.cbuf,
+                0,
+                None,
+                (c as *const FrameConsts).cast(),
+                0,
+                0,
+            );
         }
     }
 
@@ -1357,8 +1359,6 @@ impl Renderer {
         let mut look = [0.0f32; 4];
         let mut look_id = 0.0;
         let mut pinch = 0.0;
-        let mut primary = [0.0; 4];
-        let mut secondary = [0.0; 4];
         match world {
             Some(w) if w.amount > 0.001 && self.capture_safe => {
                 if !(self.frozen && !self.desk.is_empty()) {
@@ -1377,15 +1377,11 @@ impl Renderer {
                     tint,
                     chroma,
                     pinch: p,
-                    primary: c1,
-                    secondary: c2,
                 } = w.look
                 {
                     look_id = 1.0;
                     look = [inversion, flash, tint, chroma];
                     pinch = p;
-                    primary = [c1[0], c1[1], c1[2], 0.0];
-                    secondary = [c2[0], c2[1], c2[2], 0.0];
                 }
             }
             _ => {
@@ -1417,8 +1413,6 @@ impl Renderer {
             g2: [glitch, ripple[0], ripple[1], pinch],
             g3: [ripple[2], ripple[3], 1.0, look_id],
             g4: look,
-            g5: primary,
-            g6: secondary,
         };
         self.set_consts(&consts);
         // SAFETY: all objects are live; the mapped pointer is written only within the buffer's
@@ -1495,10 +1489,7 @@ impl Renderer {
                         if (start as usize) + 6 > nc {
                             break;
                         }
-                        if let Some(srv) = out
-                            .and_then(|i| self.desk.get(i))
-                            .and_then(|o| o.srv.as_ref())
-                        {
+                        if let Some(srv) = out.and_then(|i| self.desk.get(i)).and_then(|o| o.srv.as_ref()) {
                             self.ctx.PSSetShaderResources(1, Some(&[Some(srv.clone())]));
                         }
                         consts.g3[2] = alpha;
@@ -1563,6 +1554,7 @@ impl Renderer {
         FrameResult::Ok
     }
 
+
     /// Debug aid: write the last rendered frame to a .bmp (premultiplied colour over black).
     /// Needed because the overlay is deliberately invisible to screen capture.
     pub fn dump_bmp(&self, path: &std::path::Path) -> anyhow::Result<()> {
@@ -1618,16 +1610,5 @@ impl Renderer {
             std::fs::write(path, out)?;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod shader_tests {
-    use super::*;
-
-    #[test]
-    fn time_stop_shader_compiles() {
-        compile(s!("ps_main"), s!("ps_4_0")).expect("time-stop pixel shader");
-        assert_eq!(std::mem::size_of::<FrameConsts>(), 7 * 16);
     }
 }

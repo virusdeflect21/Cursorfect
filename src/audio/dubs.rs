@@ -16,7 +16,7 @@ pub struct Clip {
 }
 
 impl Clip {
-    pub const fn new(file: &'static str, from: f32, to: f32) -> Self {
+    const fn new(file: &'static str, from: f32, to: f32) -> Self {
         Self { file, from, to }
     }
 
@@ -34,7 +34,7 @@ pub const F_JOTARO_RESUME: &str = "jotaro_resume.mp3";
 pub const F_DIEGO: &str = "diego.mp3";
 pub const F_OVER_HEAVEN: &str = "over_heaven.mp3";
 
-pub const ALL_FILES: [&str; 11] = [
+pub const ALL_FILES: [&str; 8] = [
     F_DIO_START,
     F_DIO_RESUME,
     F_SFX_ONLY,
@@ -43,9 +43,6 @@ pub const ALL_FILES: [&str; 11] = [
     F_JOTARO_RESUME,
     F_DIEGO,
     F_OVER_HEAVEN,
-    "custom_stop.mp3",
-    "custom_tick.mp3",
-    "custom_resume.mp3",
 ];
 
 /// Voice-less time stop (also the fallback when a dub's voice is switched off but its SFX
@@ -73,18 +70,16 @@ pub enum Dub {
     OverHeaven,
     /// No voice lines, sound effects only.
     SfxOnly,
-    Custom,
 }
 
 impl Dub {
-    pub const ALL: [Dub; 7] = [
+    pub const ALL: [Dub; 6] = [
         Dub::DioJp,
         Dub::JotaroJp,
         Dub::JotaroEn,
         Dub::Diego,
         Dub::OverHeaven,
         Dub::SfxOnly,
-        Dub::Custom,
     ];
 
     pub fn index(self) -> i32 {
@@ -155,16 +150,6 @@ impl Dub {
                 resume: Part::SfxOnly {
                     sfx: GENERIC_RESUME,
                     impact: GENERIC_RESUME_IMPACT,
-                },
-            },
-            Dub::Custom => DubDef {
-                stop: Part::SfxOnly {
-                    sfx: Clip::new("custom_stop.mp3", 0.0, 3600.0),
-                    impact: 0.0,
-                },
-                resume: Part::SfxOnly {
-                    sfx: Clip::new("custom_resume.mp3", 0.0, 3600.0),
-                    impact: 0.0,
                 },
             },
             Dub::SfxOnly => DubDef {
@@ -284,10 +269,7 @@ mod tests {
         let p = plan(d.stop, true, true, true, (GENERIC_STOP, 0.85), &all);
         assert_eq!(p.clips.len(), 2);
         let voice_len = 2.11 - 0.18;
-        assert!(
-            (p.clips[1].0 - voice_len).abs() < 1e-4,
-            "SFX starts after the voice"
-        );
+        assert!((p.clips[1].0 - voice_len).abs() < 1e-4, "SFX starts after the voice");
         assert!((p.moment - (voice_len + 0.05)).abs() < 1e-4);
     }
 

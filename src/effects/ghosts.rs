@@ -146,20 +146,20 @@ impl Ghosts {
             _ => now,
         };
         while t <= now {
-            if let Some(pos) = tracker.pos_at(t)
-                && self.last_pos.is_none_or(|p| p.distance(pos) >= min_dist)
-            {
-                let color = self.next_color_step(cfg, hue_step);
-                self.push(Ghost {
-                    pos,
-                    born: t,
-                    life,
-                    alpha: 1.0,
-                    color,
-                    dir,
-                    speedf,
-                });
-                self.last_pos = Some(pos);
+            if let Some(pos) = tracker.pos_at(t) {
+                if self.last_pos.is_none_or(|p| p.distance(pos) >= min_dist) {
+                    let color = self.next_color_step(cfg, hue_step);
+                    self.push(Ghost {
+                        pos,
+                        born: t,
+                        life,
+                        alpha: 1.0,
+                        color,
+                        dir,
+                        speedf,
+                    });
+                    self.last_pos = Some(pos);
+                }
             }
             self.last_stamp = Some(t);
             t += interval;
@@ -169,100 +169,6 @@ impl Ghosts {
     pub fn prune(&mut self, now: Instant) {
         self.list
             .retain(|g| now.saturating_duration_since(g.born).as_secs_f32() < g.life);
-    }
-
-    /// MIH uses the same bounded cursor-sprite pool, but calm white/cyan echoes
-    /// rather than the Sandevistan's rainbow stamps / RGB glitch.
-    pub fn spawn_heaven_from_motion(
-        &mut self,
-        tracker: &CursorTracker,
-        now: Instant,
-        speed: f32,
-        progress: f32,
-        cfg: &Config,
-    ) {
-        let smooth = |lo: f32, hi: f32| {
-            let x = ((progress - lo) / (hi - lo)).clamp(0.0, 1.0);
-            x * x * (3.0 - 2.0 * x)
-        };
-        // Cross-fade density across the phase boundaries instead of popping 4/5 stamps in.
-        let count = 3.0 + 4.0 * smooth(0.32, 0.40) + 5.0 * smooth(0.71, 0.79);
-        let cap = count.ceil() as usize;
-        let speedf = speed_factor(speed);
-        let interval = Duration::from_secs_f32(
-            (0.050 - 0.014 * progress - 0.006 * speedf).max(0.030)
-                * if cfg.performance_mode { 1.35 } else { 1.0 },
-        );
-        if speed < 28.0 {
-            return;
-        }
-        let life = interval.as_secs_f32() * count;
-        let min_dist = (5.0 + 7.0 * speedf) * cfg.scale.max(0.75);
-        let dir = tracker
-            .direction(now, Duration::from_millis(60), 2.0)
-            .unwrap_or(Vec2::X);
-        let mut t = match self.last_stamp {
-            Some(s) if now.saturating_duration_since(s) < interval * 6 => s + interval,
-            _ => now,
-        };
-        // Catch up along the timestamped history, not at the current cursor position.
-        while t <= now {
-            if let Some(pos) = tracker.pos_at(t)
-                && self.last_pos.is_none_or(|p| p.distance(pos) >= min_dist)
-            {
-                while self.list.len() >= cap {
-                    self.list.remove(0);
-                }
-                let color = mix(
-                    [0.30, 0.91, 1.0],
-                    [1.0; 3],
-                    (self.counter % 3) as f32 * 0.24,
-                );
-                self.counter = self.counter.wrapping_add(1);
-                self.push(Ghost {
-                    pos,
-                    born: t,
-                    life,
-                    alpha: 1.0,
-                    color,
-                    dir,
-                    speedf,
-                });
-                self.last_pos = Some(pos);
-            }
-            self.last_stamp = Some(t);
-            t += interval;
-        }
-    }
-
-    pub fn draw_heaven(&self, batch: &mut Batch, now: Instant, cfg: &Config, opacity: f32) {
-        for g in &self.list {
-            let k = (now.saturating_duration_since(g.born).as_secs_f32() / g.life).clamp(0.0, 1.0);
-            let a = cfg.ghost_opacity * opacity * (1.0 - k).powf(1.3);
-            if a <= 0.003 {
-                continue;
-            }
-            if let Some(cs) = cfg.cursor {
-                let shrink = 1.0 - 0.08 * k;
-                let size = cs.size * shrink;
-                let tl = g.pos - cs.hotspot * shrink;
-                if !cfg.performance_mode {
-                    batch.sprite_glow(
-                        tl,
-                        size,
-                        (2.0 + g.speedf) * cfg.scale,
-                        [0.25, 0.90, 1.0],
-                        a * 0.55,
-                    );
-                }
-                batch.sprite(tl, size, mix(g.color, [1.0; 3], 0.45), a, 0.15);
-            } else {
-                let scale = cfg.scale.max(0.5) * 1.15;
-                for tri in ARROW_TRIS {
-                    batch.tri(tri.map(|i| g.pos + ARROW[i] * scale), g.color, a, 0.25);
-                }
-            }
-        }
     }
 
     pub fn draw(&self, batch: &mut Batch, now: Instant, cfg: &Config) {

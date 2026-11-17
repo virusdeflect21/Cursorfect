@@ -34,7 +34,6 @@ use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use serde::Deserialize;
 
 use super::dubs::{self, Clip};
-use super::mih::{self, MihSound};
 use super::synthesis::{SAMPLE_RATE, Sfx, synth};
 use crate::settings::config::SoundMode;
 use crate::settings::presets::SfxProfile;
@@ -63,9 +62,7 @@ pub enum AudioCmd {
     /// The effect turned on.
     Start,
     /// The effect turned off. `natural`: the full track just ran out (play nothing more).
-    End {
-        natural: bool,
-    },
+    End { natural: bool },
     /// Energy ran out: stop everything and play the overheat / power-down sound.
     Overheat,
     Dash,
@@ -87,17 +84,6 @@ pub enum AudioCmd {
     TwPreview(Vec<(f32, Clip)>),
     /// The World: fade out every time-stop sound still playing.
     TwStopAll,
-    /// MIH one-shots, decoded on this audio thread, never in the input hook.
-    MihPlay(MihSound),
-    MihPreview(MihSound),
-    /// Normal completion may let the reset one-shot finish; cancellation never does.
-    MihFinish,
-    /// `immediate`: emergency / exit; otherwise use the existing fade engine.
-    MihStopAll {
-        immediate: bool,
-    },
-    SetMihEnabled(bool),
-    SetMihVolume(u8),
     SetProfile(SfxProfile),
     /// Re-scan the sound folders (picks up newly added files).
     Reload,
@@ -107,16 +93,12 @@ pub enum AudioCmd {
 /// What the engine needs to know about the loaded sounds.
 #[derive(Clone, Debug, Default)]
 pub struct AudioInfo {
-    /// Initial decoding/reload completes asynchronously; don't report missing files early.
-    pub loaded: bool,
     /// Length of the full-sequence sound, if one is loaded.
     pub sequence_len: Option<Duration>,
     /// File names of user sounds in use.
     pub custom: Vec<String>,
     /// Human-readable description of the parts (for the settings window).
     pub parts: String,
-    pub mih_parts: String,
-    pub mih_loaded: [bool; 5],
 }
 
 pub struct AudioHandle {
@@ -134,8 +116,6 @@ pub struct AudioConfig {
     pub profile: SfxProfile,
     /// Sandevistan: start, movement, dash, end.
     pub sv_parts: [bool; 4],
-    pub mih_enabled: bool,
-    pub mih_volume: u8,
 }
 
 /// Folder with The World's sounds, searched like the other sound folders.
@@ -167,12 +147,6 @@ impl AudioHandle {
             .spawn(move || run(rx, cfg, shared))
             .map_err(|e| tracing::error!("cannot spawn audio thread: {e}"))
             .ok();
-        if join.is_none()
-            && let Ok(mut state) = info.lock()
-        {
-            state.loaded = true;
-            state.mih_parts = "Audio thread unavailable; MIH will run silently".into();
-        }
         Self { tx, join, info }
     }
 
@@ -471,7 +445,9 @@ const PART_HEADROOM: f32 = 0.6;
 impl Parts {
     pub fn cut(p: &Pcm, plan: &CutPlan) -> Self {
         // Flatten first (no pulsing swell), then make the wrap-around seamless.
-        let move_loop = p.cut(plan.move_[0], plan.move_[1], 0.0, 0.0).flatten(0.12);
+        let move_loop = p
+            .cut(plan.move_[0], plan.move_[1], 0.0, 0.0)
+            .flatten(0.12);
         let len = move_loop.secs();
         let move_loop = move_loop.seamless_loop(0.0, len, 0.45);
         let rms = move_loop.rms();
@@ -482,9 +458,7 @@ impl Parts {
         };
         Self {
             full: p.clone().gain(PART_HEADROOM),
-            start: p
-                .cut(plan.start[0], plan.start[1], 0.0, 0.08)
-                .gain(PART_HEADROOM),
+            start: p.cut(plan.start[0], plan.start[1], 0.0, 0.08).gain(PART_HEADROOM),
             move_loop,
             dashes: plan
                 .dash
@@ -494,9 +468,7 @@ impl Parts {
                         .gain(PART_HEADROOM)
                 })
                 .collect(),
-            end: p
-                .cut(plan.end[0], plan.end[1], 0.03, 0.15)
-                .gain(PART_HEADROOM),
+            end: p.cut(plan.end[0], plan.end[1], 0.03, 0.15).gain(PART_HEADROOM),
         }
     }
 }
@@ -718,9 +690,7 @@ impl Sounds {
             .get(&sfx)
             .or_else(|| self.synth.get(&sfx))
             .cloned()
-            .unwrap_or_else(|| {
-                SamplesBuffer::new(NonZero::<u16>::MIN, NonZero::<u32>::MIN, vec![0.0])
-            })
+            .unwrap_or_else(|| SamplesBuffer::new(NonZero::<u16>::MIN, NonZero::<u32>::MIN, vec![0.0]))
     }
 
     /// With the user's Sandevistan sound loaded, synthesized one-shots would clash with it:
@@ -795,8 +765,6 @@ struct Fade {
     from: f32,
     start: Instant,
     dur: Duration,
-    /// Allows a fresh MIH activation to stop its previous fading copy, not overlap it.
-    mih_owner: Option<MihSound>,
 }
 
 struct MoveLayer {
@@ -820,10 +788,6 @@ struct State {
     /// The World: decoded files by name.
     tw_files: HashMap<&'static str, Pcm>,
     tw_players: Vec<rodio::Player>,
-    mih_files: HashMap<MihSound, SamplesBuffer>,
-    mih_names: HashMap<MihSound, String>,
-    mih_players: HashMap<MihSound, rodio::Player>,
-    mih_preview: Option<rodio::Player>,
     published: HashSet<String>,
 }
 
@@ -865,7 +829,6 @@ impl State {
             from,
             start: Instant::now(),
             dur,
-            mih_owner: None,
         });
     }
 
@@ -1013,89 +976,6 @@ impl State {
         }
     }
 
-    fn mih_volume(&self) -> f32 {
-        gain(self.cfg.volume) * gain(self.cfg.mih_volume)
-    }
-
-    fn mih_stop_all(&mut self, immediate: bool, keep_reset: bool) {
-        let players = std::mem::take(&mut self.mih_players);
-        for (sound, player) in players {
-            if keep_reset && sound == MihSound::UniverseReset && !player.empty() {
-                self.mih_players.insert(sound, player);
-            } else if immediate {
-                player.stop();
-            } else {
-                self.fades.push(Fade {
-                    from: player.volume(),
-                    player,
-                    start: Instant::now(),
-                    dur: Duration::from_millis(180),
-                    mih_owner: Some(sound),
-                });
-            }
-        }
-        if let Some(player) = self.mih_preview.take() {
-            player.stop();
-        }
-        if immediate {
-            self.fades.retain(|fade| {
-                if fade.mih_owner.is_some() {
-                    fade.player.stop();
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-    }
-
-    fn mih_play(&mut self, sound: MihSound, preview: bool) {
-        if !preview && !(self.audible() && self.cfg.mih_enabled) {
-            return;
-        }
-        if self.cfg.volume == 0 || self.cfg.mih_volume == 0 {
-            return;
-        }
-        let Some(buffer) = self.mih_files.get(&sound).cloned() else {
-            return;
-        };
-        if preview {
-            if let Some(player) = self.mih_preview.take() {
-                player.stop();
-            }
-        } else {
-            if self
-                .mih_players
-                .get(&sound)
-                .is_some_and(|player| !player.empty())
-            {
-                return;
-            }
-            if sound == MihSound::Activation {
-                // Loop/re-activation: don't overlap the previous reset or activation tail.
-                self.mih_stop_all(true, false);
-            }
-            self.fades.retain(|fade| {
-                if fade.mih_owner == Some(sound) {
-                    fade.player.stop();
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-        let volume = self.mih_volume();
-        if let Some(player) = self.player() {
-            player.set_volume(volume);
-            player.append(buffer);
-            if preview {
-                self.mih_preview = Some(player);
-            } else {
-                self.mih_players.insert(sound, player);
-            }
-        }
-    }
-
     fn rate_limited(&mut self, sfx: Sfx) -> bool {
         let now = Instant::now();
         if let Some(prev) = self.last_play.get(&sfx) {
@@ -1120,11 +1000,7 @@ impl State {
             Part::End => self.sounds.end(),
             Part::Move => {
                 let mv = f32::from(self.cfg.move_volume.max(20)) / 100.0;
-                self.sounds
-                    .move_loop()
-                    .looped_preview(3.0)
-                    .gain(mv)
-                    .buffer()
+                self.sounds.move_loop().looped_preview(3.0).gain(mv).buffer()
             }
             Part::Full => match self.sounds.parts.as_ref() {
                 Some(p) => p.full.buffer(),
@@ -1168,41 +1044,12 @@ impl State {
         if self.main.as_ref().is_some_and(|p| p.empty()) {
             self.main = None;
         }
-        self.mih_players.retain(|_, player| !player.empty());
-        if self
-            .mih_preview
-            .as_ref()
-            .is_some_and(|player| player.empty())
-        {
-            self.mih_preview = None;
-        }
-        !self.fades.is_empty()
-            || self.movement.is_some()
-            || !self.mih_players.is_empty()
-            || self.mih_preview.is_some()
+        !self.fades.is_empty() || self.movement.is_some()
     }
 
     fn publish(&mut self, shared: &Arc<Mutex<AudioInfo>>) {
         if let Ok(mut i) = shared.lock() {
             *i = self.sounds.info.clone();
-            i.loaded = true;
-            for sound in MihSound::ALL {
-                i.mih_loaded[sound.index()] = self.mih_files.contains_key(&sound);
-            }
-            i.mih_parts = MihSound::ALL
-                .iter()
-                .map(|sound| {
-                    format!(
-                        "{}: {}",
-                        sound.label(),
-                        self.mih_names
-                            .get(sound)
-                            .map(String::as_str)
-                            .unwrap_or("silent (no matching file)")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
         }
         let names: HashSet<String> = self.sounds.info.custom.iter().cloned().collect();
         if names != self.published {
@@ -1227,28 +1074,7 @@ fn load_theworld() -> HashMap<&'static str, Pcm> {
     map
 }
 
-fn load_mih() -> (HashMap<MihSound, SamplesBuffer>, HashMap<MihSound, String>) {
-    let mut buffers = HashMap::new();
-    let mut names = HashMap::new();
-    for (event, path) in mih::discover(&mih::asset_dirs()) {
-        if let Some(pcm) = decode_pcm(&path) {
-            names.insert(event, file_name(&path));
-            // Keep the supplied recording intact, only add tiny anti-click fades and
-            // common loudness/headroom using the existing PCM engine.
-            let length = pcm.secs();
-            buffers.insert(
-                event,
-                normalize_clip(pcm.cut(0.0, length, 0.004, 0.025))
-                    .gain(0.75)
-                    .buffer(),
-            );
-        }
-    }
-    (buffers, names)
-}
-
 fn run(rx: Receiver<AudioCmd>, cfg: AudioConfig, shared: Arc<Mutex<AudioInfo>>) {
-    let (mih_files, mih_names) = load_mih();
     let mut st = State {
         cfg,
         sounds: Sounds::load(cfg.profile),
@@ -1262,10 +1088,6 @@ fn run(rx: Receiver<AudioCmd>, cfg: AudioConfig, shared: Arc<Mutex<AudioInfo>>) 
         dash_duck: None,
         tw_files: load_theworld(),
         tw_players: Vec::new(),
-        mih_files,
-        mih_names,
-        mih_players: HashMap::new(),
-        mih_preview: None,
         published: HashSet::new(),
     };
     st.publish(&shared);
@@ -1299,7 +1121,6 @@ fn run(rx: Receiver<AudioCmd>, cfg: AudioConfig, shared: Arc<Mutex<AudioInfo>>) 
                     if !v {
                         st.stop_main(FADE_START);
                         st.stop_move(FADE_START);
-                        st.mih_stop_all(false, false);
                     }
                 }
                 AudioCmd::SetVolume(v) => {
@@ -1307,13 +1128,6 @@ fn run(rx: Receiver<AudioCmd>, cfg: AudioConfig, shared: Arc<Mutex<AudioInfo>>) 
                     let g = gain(st.cfg.volume);
                     if let Some(p) = st.main.as_ref() {
                         p.set_volume(g);
-                    }
-                    let volume = st.mih_volume();
-                    for player in st.mih_players.values() {
-                        player.set_volume(volume);
-                    }
-                    if let Some(player) = &st.mih_preview {
-                        player.set_volume(volume);
                     }
                 }
                 AudioCmd::SetMoveVolume(v) => st.cfg.move_volume = v.min(100),
@@ -1331,26 +1145,6 @@ fn run(rx: Receiver<AudioCmd>, cfg: AudioConfig, shared: Arc<Mutex<AudioInfo>>) 
                     st.tw_play(&clips, true);
                 }
                 AudioCmd::TwStopAll => st.tw_stop_all(),
-                AudioCmd::MihPlay(sound) => st.mih_play(sound, false),
-                AudioCmd::MihPreview(sound) => st.mih_play(sound, true),
-                AudioCmd::MihFinish => st.mih_stop_all(false, true),
-                AudioCmd::MihStopAll { immediate } => st.mih_stop_all(immediate, false),
-                AudioCmd::SetMihEnabled(enabled) => {
-                    st.cfg.mih_enabled = enabled;
-                    if !enabled {
-                        st.mih_stop_all(false, false);
-                    }
-                }
-                AudioCmd::SetMihVolume(volume) => {
-                    st.cfg.mih_volume = volume.min(100);
-                    let volume = st.mih_volume();
-                    for player in st.mih_players.values() {
-                        player.set_volume(volume);
-                    }
-                    if let Some(player) = &st.mih_preview {
-                        player.set_volume(volume);
-                    }
-                }
                 AudioCmd::SetProfile(p) => {
                     if p != st.cfg.profile {
                         st.cfg.profile = p;
@@ -1359,12 +1153,8 @@ fn run(rx: Receiver<AudioCmd>, cfg: AudioConfig, shared: Arc<Mutex<AudioInfo>>) 
                     }
                 }
                 AudioCmd::Reload => {
-                    if let Ok(mut info) = shared.lock() {
-                        info.loaded = false;
-                    }
                     st.sounds = Sounds::load(st.cfg.profile);
                     st.tw_files = load_theworld();
-                    (st.mih_files, st.mih_names) = load_mih();
                     st.publish(&shared);
                 }
                 AudioCmd::Start => st.on_start(),
@@ -1479,27 +1269,5 @@ mod tests {
         let l = synth_move_loop(SfxProfile::David);
         assert!(l.secs() > 1.5);
         assert!((l.rms() - MOVE_RMS).abs() < 0.01);
-    }
-
-    #[test]
-    fn provided_mih_mp3s_decode_when_present() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("MIHassets");
-        let files = mih::discover(&[dir]);
-        for (event, path) in &files {
-            let pcm =
-                decode_pcm(path).expect("present MIH sound must decode with rodio's MP3 feature");
-            assert!(pcm.secs() > 0.0);
-            assert!(pcm.samples.iter().all(|sample| sample.is_finite()));
-            eprintln!(
-                "{}: {} ({:.3}s, {} channels, {} Hz)",
-                event.label(),
-                path.display(),
-                pcm.secs(),
-                pcm.channels,
-                pcm.rate
-            );
-        }
-        // Copyrighted audio is deliberately absent from fresh GitHub checkouts.
-        eprintln!("Validated {} locally provided MIH audio files", files.len());
     }
 }
