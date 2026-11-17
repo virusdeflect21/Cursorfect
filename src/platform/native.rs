@@ -16,7 +16,7 @@ use windows::Win32::System::Registry::{
     RegSetValueExW,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent,
+    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, OpenEventW, SetEvent,
     WaitForSingleObject,
 };
 use windows::Win32::UI::HiDpi::{
@@ -434,5 +434,26 @@ pub fn set_startup(enabled: bool, minimized: bool) -> anyhow::Result<()> {
         result?;
     }
     Ok(())
+}
+
+// Windows pointer speed is the software equivalent of a DPI boost. Restore it on
+// deactivation, shutdown, or panic; hardware sensor DPI is controlled by the mouse.
+static ORIGINAL_MOUSE_SPEED: std::sync::Mutex<Option<i32>> = std::sync::Mutex::new(None);
+pub fn boost_mouse_speed(on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETMOUSESPEED, SPI_SETMOUSESPEED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    let Ok(mut original) = ORIGINAL_MOUSE_SPEED.lock() else { return; };
+    unsafe {
+        if on && original.is_none() {
+            let mut speed: i32 = 0;
+            if SystemParametersInfoW(SPI_GETMOUSESPEED, 0, Some((&mut speed as *mut i32).cast()), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok() {
+                let boosted = (speed + 4).min(20);
+                if SystemParametersInfoW(SPI_SETMOUSESPEED, 0, Some(boosted as usize as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok() { *original = Some(speed); }
+            }
+        } else if !on {
+            if let Some(speed) = original.take() {
+                let _ = SystemParametersInfoW(SPI_SETMOUSESPEED, 0, Some(speed as usize as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
+            }
+        }
+    }
 }
 

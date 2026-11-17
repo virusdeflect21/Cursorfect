@@ -51,6 +51,7 @@ pub fn status_color(s: SysState) -> Color {
 /// Push every setting into the window's properties.
 pub fn apply_settings(ui: &MainWindow, s: &Settings) {
     ui.set_master_on(s.master_enabled);
+    ui.set_mouse_boost(s.mouse_boost);
     ui.set_effect(match s.effect {
         EffectKind::Sandevistan => 0,
         EffectKind::TheWorld => 1,
@@ -67,6 +68,9 @@ pub fn apply_settings(ui: &MainWindow, s: &Settings) {
     });
     ui.set_tw_duration(f32::from(t.duration_secs));
     ui.set_tw_dub(t.dub.index());
+    ui.set_tw_windup(t.windups[t.dub.index() as usize]);
+    ui.set_tw_custom_primary(t.custom_primary.clone().into());
+    ui.set_tw_custom_secondary(t.custom_secondary.clone().into());
     ui.set_tw_voice(t.voice);
     ui.set_tw_sfx(t.stop_sfx);
     ui.set_tw_ticks(t.ticks);
@@ -156,7 +160,12 @@ pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
         _ => TimeStopMode::Toggle,
     };
     t.duration_secs = ui.get_tw_duration().round().clamp(1.0, 9.0) as u8;
-    t.dub = Dub::from_index(ui.get_tw_dub());
+    let old_dub = t.dub;
+    let new_dub = Dub::from_index(ui.get_tw_dub());
+    if old_dub == new_dub { t.windups[new_dub.index() as usize] = ui.get_tw_windup().clamp(-1.0, 15.0); }
+    t.dub = new_dub;
+    t.custom_primary = ui.get_tw_custom_primary().to_string();
+    t.custom_secondary = ui.get_tw_custom_secondary().to_string();
     t.voice = ui.get_tw_voice();
     t.stop_sfx = ui.get_tw_sfx();
     t.ticks = ui.get_tw_ticks();
@@ -172,6 +181,7 @@ pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
     t.streaks = ui.get_tw_streaks();
     t.flare = ui.get_tw_flare();
     t.rays = ui.get_tw_rays();
+    s.mouse_boost = ui.get_mouse_boost();
     s.effects.ripples = ui.get_fx_ripples();
     s.effects.glitch = ui.get_fx_glitch();
     s.effects.speed_bursts = ui.get_fx_bursts();
@@ -225,3 +235,4 @@ pub fn read_settings(ui: &MainWindow, base: &Settings) -> Settings {
     apply_preview_colors(ui, &s);
     s
 }
+

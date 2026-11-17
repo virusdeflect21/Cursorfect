@@ -106,7 +106,7 @@ fn tw_plan(s: &Settings, resume: bool) -> dubs::Plan {
     let on = s.audio.enabled;
     let def = tw.dub.def();
     let available = |f: &str| theworld_file(f).is_some();
-    if resume {
+    let mut plan = if resume {
         dubs::plan(
             def.resume,
             on && tw.resume_voice,
@@ -124,7 +124,11 @@ fn tw_plan(s: &Settings, resume: bool) -> dubs::Plan {
             (dubs::GENERIC_STOP, dubs::GENERIC_STOP_IMPACT),
             &available,
         )
+    };
+    if !resume && tw.windups[tw.dub.index() as usize] >= 0.0 {
+        plan.moment = tw.windups[tw.dub.index() as usize];
     }
+    plan
 }
 
 const RECORD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -784,6 +788,7 @@ impl Engine {
             .unwrap_or(Vec2::ZERO);
         match tr {
             Transition::Activated => {
+                native::boost_mouse_speed(self.settings.mouse_boost);
                 self.ensure_overlay();
                 self.tracker.push(pos, now, false);
                 self.frames_since_activation = 0;
@@ -819,6 +824,7 @@ impl Engine {
                 self.next_frame = now;
             }
             Transition::Deactivated => {
+                native::boost_mouse_speed(false);
                 self.effects.deactivate(pos, now);
                 self.auto_end_at = None;
                 self.audio.send(AudioCmd::End {
@@ -828,6 +834,7 @@ impl Engine {
                 self.natural_end = false;
             }
             Transition::Overheated => {
+                native::boost_mouse_speed(false);
                 self.effects.deactivate(pos, now);
                 self.auto_end_at = None;
                 self.full_track = false;
@@ -862,6 +869,7 @@ impl Engine {
         let was_active = self.machine.is_active();
         self.tw_force_end(now, false);
         self.machine.emergency_stop();
+        native::boost_mouse_speed(false);
         self.set_cursor_lock(false);
         self.settings.master_enabled = false;
         self.effects.clear();
@@ -893,6 +901,8 @@ impl Engine {
         let reduced = self.settings.performance.performance_mode;
         TwOptions {
             dub: t.dub,
+            custom_primary: crate::settings::presets::parse_hex(&t.custom_primary).unwrap_or([0.91, 0.36, 1.0]),
+            custom_secondary: crate::settings::presets::parse_hex(&t.custom_secondary).unwrap_or([0.38, 0.22, 0.78]),
             mode: t.mode,
             duration: f32::from(t.duration_secs),
             max_secs: t.max_secs as f32,
@@ -1005,7 +1015,9 @@ impl Engine {
                 TwEvent::Freeze => self.tw_freeze(now),
                 TwEvent::Tick(_) => {
                     if self.settings.audio.enabled && self.settings.the_world.ticks {
-                        self.audio.send(AudioCmd::TwTick);
+                        if self.settings.the_world.dub == dubs::Dub::Custom {
+                            self.audio.send(AudioCmd::TwPlay(vec![(0.0, dubs::Clip::new("custom_tick.mp3", 0.0, 3600.0))]));
+                        } else { self.audio.send(AudioCmd::TwTick); }
                     }
                 }
                 TwEvent::AutoResume => self.tw_resume(now),

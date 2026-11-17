@@ -71,6 +71,8 @@ pub enum TwEvent {
 #[derive(Clone, Copy, Debug)]
 pub struct TwOptions {
     pub dub: Dub,
+    pub custom_primary: Rgb,
+    pub custom_secondary: Rgb,
     pub mode: TimeStopMode,
     pub duration: f32,
     pub max_secs: f32,
@@ -89,6 +91,8 @@ impl Default for TwOptions {
     fn default() -> Self {
         Self {
             dub: Dub::DioJp,
+            custom_primary: [0.91, 0.36, 1.0],
+            custom_secondary: [0.38, 0.22, 0.78],
             mode: TimeStopMode::Toggle,
             duration: 5.0,
             max_secs: 300.0,
@@ -181,6 +185,10 @@ impl TimeStop {
         }
     }
 
+    fn colors(&self) -> (Rgb, Rgb) {
+        if self.opts.dub == Dub::Custom { (self.opts.custom_primary, self.opts.custom_secondary) } else { palette(self.opts.dub) }
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }
@@ -241,7 +249,7 @@ impl TimeStop {
         self.set_phase(Phase::Stopping, now);
         if self.opts.rays {
             let mut c = cfg.clone();
-            let (primary, secondary) = palette(self.opts.dub);
+            let (primary, secondary) = self.colors();
             c.style.palette = [primary, secondary, mix(primary, [1.0; 3], 0.65), primary, secondary, primary];
             self.rays
                 .spawn(self.center, now, 26, 520.0, 0.7, Vec2::ZERO, &c, &mut self.rng);
@@ -471,8 +479,8 @@ impl TimeStop {
                 tint,
                 chroma,
                 pinch: 0.0,
-                primary: palette(self.opts.dub).0,
-                secondary: palette(self.opts.dub).1,
+                primary: self.colors().0,
+                secondary: self.colors().1,
             },
         };
         let no_ripple = (self.center, 0.0, 0.0);
@@ -499,8 +507,8 @@ impl TimeStop {
                     flash: 0.0,
                     tint,
                     chroma,
-                    primary: palette(self.opts.dub).0,
-                    secondary: palette(self.opts.dub).1,
+                    primary: self.colors().0,
+                    secondary: self.colors().1,
                     pinch: if self.opts.flare {
                         smooth(0.78, 1.0, k)
                     } else {
@@ -577,6 +585,28 @@ impl TimeStop {
             .sum()
     }
 
+    // Only copy pixels belonging to this window: higher windows cover parts of the
+    // desktop capture and must never be carried along with a lower window.
+    fn visible_pieces(&self, index: usize) -> Vec<WinRect> {
+        let mut pieces = vec![self.windows[index].rect];
+        for cover in self.windows.iter().take(index).map(|w| w.rect) {
+            let mut next = Vec::new();
+            for r in pieces {
+                let l = r.l.max(cover.l); let t = r.t.max(cover.t);
+                let right = r.r.min(cover.r); let bottom = r.b.min(cover.b);
+                if l >= right || t >= bottom { next.push(r); continue; }
+                for part in [WinRect { l: r.l, t: r.t, r: r.r, b: t },
+                             WinRect { l: r.l, t: bottom, r: r.r, b: r.b },
+                             WinRect { l: r.l, t, r: l, b: bottom },
+                             WinRect { l: right, t, r: r.r, b: bottom }] {
+                    if part.w() > 0.0 && part.h() > 0.0 { next.push(part); }
+                }
+            }
+            pieces = next;
+        }
+        pieces
+    }
+
     /// Frozen-image pieces: vacated spots and the windows at their new places.
     pub fn crops(&self, now: Instant) -> Vec<Crop> {
         if !matches!(
@@ -616,24 +646,18 @@ impl TimeStop {
             if Some(m.win) == dragging {
                 continue;
             }
-            if let Some(w) = self.windows.get(m.win) {
-                out.push(Crop {
-                    src: Some(r4(w.rect)),
-                    dst: r4(w.rect.offset(m.dx, m.dy)),
-                    alpha: 1.0,
-                    fill: [0.0; 4],
-                });
+            if self.windows.get(m.win).is_some() {
+                for piece in self.visible_pieces(m.win) {
+                    out.push(Crop { src: Some(r4(piece)), dst: r4(piece.offset(m.dx, m.dy)), alpha: 1.0, fill: [0.0; 4] });
+                }
             }
         }
         if let Some(d) = self.drag.as_ref() {
-            if let Some(w) = self.windows.get(d.win) {
+            if self.windows.get(d.win).is_some() {
                 let off = d.base + (d.cur - d.start);
-                out.push(Crop {
-                    src: Some(r4(w.rect)),
-                    dst: r4(w.rect.offset(off.x, off.y)),
-                    alpha: 0.9,
-                    fill: [0.0; 4],
-                });
+                for piece in self.visible_pieces(d.win) {
+                    out.push(Crop { src: Some(r4(piece)), dst: r4(piece.offset(off.x, off.y)), alpha: 0.95, fill: [0.0; 4] });
+                }
             }
         }
         out
@@ -814,7 +838,7 @@ impl TimeStop {
     }
 
     pub fn draw(&mut self, batch: &mut Batch, now: Instant, cfg: &Config, cursor: Option<Vec2>) {
-        let (primary, secondary) = palette(self.opts.dub);
+        let (primary, secondary) = self.colors();
         let t = now.saturating_duration_since(self.phase_at).as_secs_f32();
         match self.phase {
             Phase::Charging => {
@@ -945,13 +969,22 @@ mod tests {
             let world = ts.world(now, 2000.0).unwrap();
             match world.look {
                 Look::TimeStop { primary, secondary, .. } => {
-                    assert_eq!((primary, secondary), palette(dub));
+                    assert_eq!((primary, secondary), ts.colors());
                 }
                 _ => panic!("expected time-stop grade"),
             }
         }
         assert_ne!(palette(Dub::Diego), palette(Dub::DioJp));
         assert_eq!(palette(Dub::JotaroJp), palette(Dub::JotaroEn));
+    }
+
+    #[test]
+    fn dragged_lower_window_excludes_occluding_pixels() {
+        let now = Instant::now();
+        let ts = stopped(now, TimeStopMode::Toggle);
+        let pieces = ts.visible_pieces(1);
+        assert!(pieces.iter().all(|r| !r.contains(300.0, 200.0)));
+        assert!(pieces.iter().any(|r| r.contains(500.0, 400.0)));
     }
 
     #[test]

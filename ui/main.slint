@@ -125,6 +125,7 @@ export component MainWindow inherits Window {
     in property <string> version: "";
 
     in-out property <bool> master-on: false;
+    in-out property <bool> mouse-boost: false;
     in property <string> activation-text: "Middle Click";
     in property <string> dash-text: "Ctrl + Middle Click";
     in property <int> recording: 0;
@@ -143,6 +144,9 @@ export component MainWindow inherits Window {
     in-out property <int> tw-mode: 1;
     in-out property <float> tw-duration: 5;
     in-out property <int> tw-dub: 0;
+    in-out property <float> tw-windup: -1;
+    in-out property <string> tw-custom-primary: "#E95BFF";
+    in-out property <string> tw-custom-secondary: "#6037C8";
     in-out property <bool> tw-voice: true;
     in-out property <bool> tw-sfx: true;
     in-out property <bool> tw-ticks: true;
@@ -295,7 +299,7 @@ export component MainWindow inherits Window {
 
             // ---- Effect picker (more effects will appear here)
             GroupBox {
-                title: "Effect";
+                title: "? Effect";
                 HorizontalLayout {
                     spacing: 8px;
                     EffectChip {
@@ -375,7 +379,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "Sound";
+                title: " Sound";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
@@ -504,7 +508,7 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         ComboBox {
-                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)"];
+                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)", "Custom time stop"];
                             current-index <=> root.tw-dub;
                             selected(v) => {
                                 root.changed();
@@ -597,7 +601,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 1: GroupBox {
-                title: "Time stop";
+                title: "? Time stop";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -614,6 +618,24 @@ export component MainWindow inherits Window {
                                 root.changed();
                             }
                         }
+                    }
+                    SliderRow {
+                        label: "Wind-up (-1 = automatic)";
+                        suffix: " s";
+                        minimum: -1;
+                        maximum: 15;
+                        value <=> root.tw-windup;
+                        edited => { root.changed(); }
+                    }
+                    if root.tw-dub == 6: VerticalLayout {
+                        spacing: 6px;
+                        Text { text: "Custom colors (#RRGGBB)"; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            LineEdit { text <=> root.tw-custom-primary; edited(t) => { root.changed(); } }
+                            LineEdit { text <=> root.tw-custom-secondary; edited(t) => { root.changed(); } }
+                        }
+                        Text { text: "Add custom_stop.mp3, custom_tick.mp3 and custom_resume.mp3 to sounds/theworld, then restart."; wrap: word-wrap; }
                     }
                     if root.tw-mode == 2: SliderRow {
                         label: "Duration";
@@ -725,7 +747,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 0: GroupBox {
-                title: "Look";
+                title: "? Look";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -865,6 +887,11 @@ export component MainWindow inherits Window {
                             root.changed();
                         }
                     }
+                    Switch {
+                        text: "Boost mouse pointer speed while active";
+                        checked <=> root.mouse-boost;
+                        toggled => { root.changed(); }
+                    }
                     SliderRow {
                         label: "Intensity";
                         value <=> root.intensity;
@@ -935,7 +962,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "System";
+                title: "? System";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {

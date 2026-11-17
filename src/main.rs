@@ -63,7 +63,7 @@ fn init_logging() {
         Some(f) => builder.with_writer(Mutex::new(f)).init(),
         None => builder.init(),
     }
-    std::panic::set_hook(Box::new(|info| tracing::error!("panic: {info}")));
+    std::panic::set_hook(Box::new(|info| { native::boost_mouse_speed(false); tracing::error!("panic: {info}"); }));
 }
 
 fn show_window(ui: &MainWindow) {
@@ -318,6 +318,7 @@ fn main() -> anyhow::Result<()> {
     }
     TRAY.with(|t| *t.borrow_mut() = None);
     native::restore_system_cursors();
+    native::boost_mouse_speed(false);
     drop(ui);
     Ok(())
 }
