@@ -3,9 +3,11 @@
 
 pub mod dash;
 pub mod ghosts;
+pub mod made_in_heaven;
 pub mod particles;
 pub mod rays;
 pub mod shockwave;
+pub mod text;
 pub mod the_world;
 pub mod trails;
 
@@ -59,6 +61,8 @@ pub enum Look {
         chroma: f32,
         /// 0..1 lens pinch towards the centre (the instant before time stops).
         pinch: f32,
+        primary: Rgb,
+        secondary: Rgb,
     },
 }
 
@@ -112,6 +116,31 @@ impl Batch {
 
     pub fn is_empty(&self) -> bool {
         self.verts.is_empty()
+    }
+
+    /// Reuse the GPU upload buffer across frames, including after display changes.
+    pub fn reset(&mut self, origin: Vec2, size: Vec2) {
+        self.verts.clear();
+        self.origin = origin;
+        self.size = size;
+    }
+
+    pub fn rect(&mut self, top_left: Vec2, size: Vec2, c: Rgb, a: f32) {
+        if a <= 0.002 || size.min_element() <= 0.0 {
+            return;
+        }
+        self.quad(
+            [
+                top_left,
+                top_left + Vec2::new(size.x, 0.0),
+                top_left + size,
+                top_left + Vec2::new(0.0, size.y),
+            ],
+            [[0.0; 2]; 4],
+            c,
+            a,
+            [MODE_SOLID, 0.0, 0.0, 0.0],
+        );
     }
 
     fn v(&mut self, p: Vec2, uv: [f32; 2], c: Rgb, a: f32, params: [f32; 4]) {
@@ -238,29 +267,30 @@ impl Batch {
             return;
         }
         let n = pts.len();
-        let mut left = Vec::with_capacity(n);
-        let mut right = Vec::with_capacity(n);
-        for i in 0..n {
+        // Compute the identical edge pair on demand. Particles use two-point ribbons;
+        // allocating two vectors for every spark was unnecessary work on the hot path.
+        let edges = |i: usize| {
             let prev = pts[i.saturating_sub(1)].pos;
             let next = pts[(i + 1).min(n - 1)].pos;
             let t = (next - prev).normalize_or_zero();
             let t = if t == Vec2::ZERO { Vec2::X } else { t };
             let nrm = Vec2::new(-t.y, t.x) * pts[i].half_width;
-            left.push(pts[i].pos + nrm);
-            right.push(pts[i].pos - nrm);
-        }
+            (pts[i].pos + nrm, pts[i].pos - nrm)
+        };
         for i in 0..n - 1 {
             let (a0, a1) = (pts[i].alpha, pts[i + 1].alpha);
             if a0 <= 0.002 && a1 <= 0.002 {
                 continue;
             }
+            let (left, right) = edges(i);
+            let (next_left, next_right) = edges(i + 1);
             let p = [MODE_RIBBON, 0.0, 0.0, add];
-            self.v(left[i], [-1.0, 0.0], c, a0, p);
-            self.v(right[i], [1.0, 0.0], c, a0, p);
-            self.v(left[i + 1], [-1.0, 0.0], c, a1, p);
-            self.v(right[i], [1.0, 0.0], c, a0, p);
-            self.v(right[i + 1], [1.0, 0.0], c, a1, p);
-            self.v(left[i + 1], [-1.0, 0.0], c, a1, p);
+            self.v(left, [-1.0, 0.0], c, a0, p);
+            self.v(right, [1.0, 0.0], c, a0, p);
+            self.v(next_left, [-1.0, 0.0], c, a1, p);
+            self.v(right, [1.0, 0.0], c, a0, p);
+            self.v(next_right, [1.0, 0.0], c, a1, p);
+            self.v(next_left, [-1.0, 0.0], c, a1, p);
         }
     }
 }
@@ -503,16 +533,8 @@ impl Effects {
             self.particles.burst(pos, 34, 680.0, cfg, &mut self.rng);
         }
         if cfg.toggles.light_rays {
-            self.rays.spawn(
-                pos,
-                now,
-                28,
-                420.0,
-                0.62,
-                Vec2::ZERO,
-                cfg,
-                &mut self.rng,
-            );
+            self.rays
+                .spawn(pos, now, 28, 420.0, 0.62, Vec2::ZERO, cfg, &mut self.rng);
         }
     }
 

@@ -332,7 +332,11 @@ mod tests {
         assert!(Shortcut::key(0x41, Modifiers::NONE).validate().is_ok());
         assert!(Shortcut::key(0x41, Modifiers::NONE).is_typing_key());
         assert!(!Shortcut::key(VK_F1, Modifiers::NONE).is_typing_key());
-        assert!(Shortcut::key(VK_ESCAPE, Modifiers::NONE).validate().is_err());
+        assert!(
+            Shortcut::key(VK_ESCAPE, Modifiers::NONE)
+                .validate()
+                .is_err()
+        );
         assert!(Shortcut::key(VK_F1 + 8, Modifiers::NONE).validate().is_ok());
         assert_eq!(
             Shortcut::key(0x43, CTRL).validate(),

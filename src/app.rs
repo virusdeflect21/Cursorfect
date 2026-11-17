@@ -12,22 +12,26 @@ use glam::Vec2;
 
 use crate::audio::dubs;
 use crate::audio::engine::{AudioCmd, AudioConfig, AudioHandle, Part, theworld_file};
+use crate::audio::mih::MihSound;
 use crate::audio::synthesis::Sfx;
+use crate::effects::made_in_heaven::{MadeInHeaven, MihEvent, MihEvents, MihPhase};
 use crate::effects::the_world::{TimeStop, TwEvent, TwOptions};
 use crate::effects::{Batch, Config, Effects};
 use crate::input::cursor::{CursorTracker, Rect, dash_endpoint};
-use crate::input::shortcuts::{MouseButton, Shortcut, Trigger};
 use crate::input::hooks::{
     Bindings, HookShared, InputEvent, RECORD_ACTIVATION, RECORD_DASH, RECORD_NONE,
 };
+use crate::input::shortcuts::{MouseButton, Shortcut, Trigger};
 use crate::overlay::Overlay;
 use crate::overlay::renderer::{FrameResult, Grade};
 use crate::overlay::window::take_display_changed;
 use crate::platform::native;
+use crate::platform::tray::TrayAction;
 use crate::platform::watchdog::Watchdog;
 use crate::platform::wm::{self, WinRect};
-use crate::platform::tray::TrayAction;
-use crate::settings::config::{self, ActivationMode, EffectKind, Settings, SoundMode, TimeStopMode};
+use crate::settings::config::{
+    self, ActivationMode, EffectKind, Settings, SoundMode, TimeStopMode,
+};
 use crate::settings::presets::{SfxProfile, style_for};
 use crate::state::{Machine, SysState, Transition};
 
@@ -45,6 +49,8 @@ pub enum Cmd {
     Preview(Part),
     /// Preview The World's sounds: 0 = time stop, 1 = resume, 2 = tick.
     TwPreview(u8),
+    MihPreview(MihSound),
+    ReloadSounds,
     ResetDefaults,
     Tray(TrayAction),
     Shutdown,
@@ -62,6 +68,7 @@ pub enum UiMsg {
     Notice(String),
     /// Which sounds are loaded and how they were cut (shown under the preview buttons).
     SoundInfo(String),
+    MihSoundInfo(String),
 }
 
 pub type UiSink = Box<dyn Fn(UiMsg) + Send>;
@@ -85,6 +92,35 @@ pub fn effect_config(s: &Settings) -> Config {
     }
 }
 
+/// MIH has a fixed white/cyan palette and independent visuals, sharing the same renderer.
+pub fn heaven_config(s: &Settings) -> Config {
+    let mut cfg = effect_config(s);
+    let mih = &s.made_in_heaven;
+    cfg.intensity = f32::from(mih.intensity) / 100.0;
+    cfg.ghost_count = 12;
+    cfg.ghost_opacity = 0.55;
+    cfg.toggles.ghosts = mih.afterimages;
+    cfg.toggles.trails = mih.motion_trails;
+    cfg.toggles.particles = mih.speed_particles;
+    cfg.toggles.glow = mih.heaven_aura;
+    cfg.toggles.world_dim = false;
+    cfg.toggles.glitch = false;
+    cfg.toggles.warp_dash = false;
+    cfg.style.primary = [0.96, 1.0, 1.0];
+    cfg.style.secondary = [0.20, 0.88, 1.0];
+    cfg.style.palette = [
+        cfg.style.secondary,
+        cfg.style.primary,
+        [0.55, 0.96, 1.0],
+        cfg.style.primary,
+        cfg.style.secondary,
+        cfg.style.primary,
+    ];
+    cfg.style.particles = 1.0;
+    cfg.max_particles = cfg.max_particles.min(180);
+    cfg
+}
+
 fn audio_config(s: &Settings) -> AudioConfig {
     AudioConfig {
         enabled: s.audio.enabled,
@@ -93,11 +129,18 @@ fn audio_config(s: &Settings) -> AudioConfig {
         mode: s.audio.mode,
         profile: style_for(s).sfx,
         sv_parts: sv_parts(s),
+        mih_enabled: s.made_in_heaven.sfx,
+        mih_volume: s.made_in_heaven.volume,
     }
 }
 
 fn sv_parts(s: &Settings) -> [bool; 4] {
-    [s.audio.sv_start, s.audio.sv_move, s.audio.sv_dash, s.audio.sv_end]
+    [
+        s.audio.sv_start,
+        s.audio.sv_move,
+        s.audio.sv_dash,
+        s.audio.sv_end,
+    ]
 }
 
 /// The time-stop / resume sound plan for the current settings.
@@ -106,7 +149,7 @@ fn tw_plan(s: &Settings, resume: bool) -> dubs::Plan {
     let on = s.audio.enabled;
     let def = tw.dub.def();
     let available = |f: &str| theworld_file(f).is_some();
-    if resume {
+    let mut plan = if resume {
         dubs::plan(
             def.resume,
             on && tw.resume_voice,
@@ -124,7 +167,11 @@ fn tw_plan(s: &Settings, resume: bool) -> dubs::Plan {
             (dubs::GENERIC_STOP, dubs::GENERIC_STOP_IMPACT),
             &available,
         )
+    };
+    if !resume && tw.windups[tw.dub.index() as usize] >= 0.0 {
+        plan.moment = tw.windups[tw.dub.index() as usize];
     }
+    plan
 }
 
 const RECORD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -191,6 +238,9 @@ struct Engine {
     last_reload: Option<Instant>,
     /// The World.
     tw: TimeStop,
+    mih: MadeInHeaven,
+    mih_cfg: Config,
+    mih_real_since: Option<Instant>,
     watchdog: std::sync::Arc<Watchdog>,
     _tx: Sender<Msg>,
 }
@@ -239,8 +289,7 @@ impl Engine {
             natural_end: false,
             // Report the loaded sounds once the audio thread has decoded them.
             sound_report_at: Some(now + Duration::from_millis(1500)),
-            dump_dir: std::env::var_os("CURSORFECT_DUMP")
-                .map(std::path::PathBuf::from),
+            dump_dir: std::env::var_os("CURSORFECT_DUMP").map(std::path::PathBuf::from),
             dump_count: 0,
             frames_since_activation: 0,
             cursors_locked: false,
@@ -249,6 +298,9 @@ impl Engine {
             started: now,
             last_reload: Some(now),
             tw: TimeStop::new(),
+            mih: MadeInHeaven::default(),
+            mih_cfg: heaven_config(&settings),
+            mih_real_since: None,
             watchdog,
             _tx: tx,
             settings,
@@ -290,7 +342,9 @@ impl Engine {
 
     fn animating(&self, now: Instant) -> bool {
         self.overlay.is_some()
-            && (self.effects.is_animating(now, &self.tracker) || self.tw.is_animating())
+            && (self.effects.is_animating(now, &self.tracker)
+                || self.tw.is_animating()
+                || self.mih.is_animating(now))
     }
 
     fn next_timeout(&self, now: Instant) -> Duration {
@@ -302,6 +356,11 @@ impl Engine {
         };
         if self.animating(now) {
             consider(self.next_frame.saturating_duration_since(now));
+        }
+        // The clock and the input lease must advance even if GPU creation failed or
+        // every MIH visual was disabled. Never tie pointer restoration to rendering.
+        if self.mih.is_busy() && !self.animating(now) {
+            consider(Duration::from_millis(16));
         }
         if self.machine.needs_tick(&self.settings.energy) {
             consider(Duration::from_millis(100));
@@ -364,6 +423,7 @@ impl Engine {
         }
 
         self.update_time_stop(now);
+        self.update_mih(now);
 
         if self.auto_end_at.is_some_and(|t| now >= t) {
             self.auto_end_at = None;
@@ -376,12 +436,20 @@ impl Engine {
         if self.sound_report_at.is_some_and(|t| now >= t) {
             self.sound_report_at = None;
             let info = self.audio.info();
-            let msg = if info.custom.is_empty() {
-                format!("No sound files found, using built-in sounds.\n{}", info.parts)
+            if !info.loaded {
+                self.sound_report_at = Some(now + Duration::from_millis(300));
             } else {
-                format!("Files: {}\n{}", info.custom.join(", "), info.parts)
-            };
-            (self.ui)(UiMsg::SoundInfo(msg));
+                let msg = if info.custom.is_empty() {
+                    format!(
+                        "No sound files found, using built-in sounds.\n{}",
+                        info.parts
+                    )
+                } else {
+                    format!("Files: {}\n{}", info.custom.join(", "), info.parts)
+                };
+                (self.ui)(UiMsg::SoundInfo(msg));
+                (self.ui)(UiMsg::MihSoundInfo(info.mih_parts));
+            }
         }
         if let Some((_, deadline)) = self.recording {
             if now >= deadline {
@@ -394,7 +462,7 @@ impl Engine {
         }
         if self.overlay_retry_at.is_some_and(|r| now >= r) && self.machine.master() {
             self.overlay_retry_at = None;
-            if self.effects.is_active() {
+            if self.effects.is_active() || self.mih.is_busy() || !self.tw.is_idle() {
                 self.ensure_overlay();
             }
         }
@@ -429,7 +497,11 @@ impl Engine {
             self.tracker.push(Vec2::new(x as f32, y as f32), t, false);
         }
         // Authoritative sample at frame time (covers hook gaps and DPI/format surprises).
-        if self.effects.is_active() || self.animating(now) || !self.tw.is_idle() {
+        if self.effects.is_active()
+            || self.animating(now)
+            || !self.tw.is_idle()
+            || self.mih.is_busy()
+        {
             if let Some(p) = native::cursor_pos() {
                 self.tracker.push(p, now, false);
             }
@@ -444,7 +516,9 @@ impl Engine {
         if now < self.next_frame {
             return;
         }
-        let animating = self.effects.is_animating(now, &self.tracker) || self.tw.is_animating();
+        let animating = self.effects.is_animating(now, &self.tracker)
+            || self.tw.is_animating()
+            || self.mih.is_animating(now);
         let cursor = self.tracker.current();
         let glow_moved = self.effects.has_glow() && cursor != self.last_render_cursor;
         let needs_clear = overlay.has_content();
@@ -462,7 +536,12 @@ impl Engine {
         self.next_frame = now + interval;
         self.cfg.scale = native::cursor_scale();
         // Afterimages are copies of the real cursor: refresh the bitmap when its shape changes.
-        if let Some(h) = native::arrow_cursor_handle() {
+        let cursor_handle = if self.mih.is_busy() && !self.settings.keep_arrow_cursor {
+            native::current_cursor_handle().or_else(native::arrow_cursor_handle)
+        } else {
+            native::arrow_cursor_handle()
+        };
+        if let Some(h) = cursor_handle {
             if h != overlay.cursor_handle() || !overlay.has_cursor_texture() {
                 if let Some(img) = native::capture_cursor(h) {
                     let opaque = img.rgba.chunks(4).filter(|p| p[3] > 128).count();
@@ -494,11 +573,28 @@ impl Engine {
         };
         self.cfg.world_supported = overlay.world_supported();
         self.cfg.hdr = overlay.hdr_available() && self.settings.effects.hdr_bloom;
+        self.mih_cfg.scale = self.cfg.scale;
+        self.mih_cfg.cursor = self.cfg.cursor;
+        self.mih_cfg.hdr = self.cfg.hdr;
         let max_radius = overlay.size().length();
         self.effects.update(now, &self.tracker, &self.cfg);
-        self.batch = Batch::new(overlay.origin(), overlay.size());
+        self.batch.reset(overlay.origin(), overlay.size());
         self.effects
             .draw(&mut self.batch, &self.tracker, now, &self.cfg, max_radius);
+        let monitor = self
+            .monitors
+            .iter()
+            .find(|m| cursor.is_some_and(|p| m.contains(p)))
+            .copied()
+            .or_else(|| self.monitors.first().copied())
+            .unwrap_or(Rect {
+                left: overlay.origin().x,
+                top: overlay.origin().y,
+                right: overlay.origin().x + overlay.size().x,
+                bottom: overlay.origin().y + overlay.size().y,
+            });
+        self.mih
+            .draw(&mut self.batch, &self.tracker, now, &self.mih_cfg, monitor);
         let mut crops = Vec::new();
         let world = if !self.tw.is_idle() {
             self.tw.draw(&mut self.batch, now, &self.cfg, cursor);
@@ -523,7 +619,11 @@ impl Engine {
         let grade = Grade {
             time: now.saturating_duration_since(self.started).as_secs_f32() % 1000.0,
             bloom: self.cfg.hdr && !self.settings.performance.performance_mode,
-            bloom_strength: 0.35 + 0.25 * self.cfg.intensity,
+            bloom_strength: if self.mih.is_animating(now) {
+                0.30 + 0.22 * self.mih_cfg.intensity
+            } else {
+                0.35 + 0.25 * self.cfg.intensity
+            },
             film: self.settings.effects.film_grade && !self.settings.performance.performance_mode,
             grain: 1.0,
         };
@@ -582,6 +682,14 @@ impl Engine {
     fn on_input(&mut self, ev: InputEvent, now: Instant) {
         match ev {
             InputEvent::MouseWake => {}
+            InputEvent::ActivationDown if self.settings.effect == EffectKind::MadeInHeaven => {
+                self.mih_press(now, false)
+            }
+            InputEvent::ActivationUp if self.settings.effect == EffectKind::MadeInHeaven => {
+                let events = self.mih.controller.release(now);
+                self.mih_events(events, now, true);
+            }
+            InputEvent::DashDown if self.settings.effect == EffectKind::MadeInHeaven => {}
             InputEvent::ActivationDown if self.settings.effect == EffectKind::TheWorld => {
                 self.tw_press(now);
             }
@@ -638,6 +746,10 @@ impl Engine {
                 if which == RECORD_NONE {
                     self.end_recording();
                 } else {
+                    if self.mih.is_busy() {
+                        // Recording changes the release binding; give normal input back first.
+                        self.mih_force_end(now, false);
+                    }
                     self.recording = Some((which, now + RECORD_TIMEOUT));
                     self.hooks.recording.store(which, Ordering::Release);
                     (self.ui)(UiMsg::Notice(String::new()));
@@ -655,17 +767,35 @@ impl Engine {
                 self.audio.send(AudioCmd::Preview(part));
                 self.sound_report_at = Some(now + Duration::from_millis(1200));
             }
+            Cmd::ReloadSounds => {
+                self.audio.send(AudioCmd::Reload);
+            }
+            Cmd::MihPreview(sound) => {
+                if self
+                    .last_reload
+                    .is_none_or(|at| now.saturating_duration_since(at) > Duration::from_secs(3))
+                {
+                    self.audio.send(AudioCmd::Reload);
+                    self.last_reload = Some(now);
+                }
+                self.audio.send(AudioCmd::MihPreview(sound));
+                self.sound_report_at = Some(now + Duration::from_millis(1200));
+            }
             Cmd::TwPreview(which) => {
                 let mut s = self.settings.clone();
                 s.audio.enabled = true;
                 let clips = match which {
                     0 => tw_plan(&s, false).clips,
                     1 => tw_plan(&s, true).clips,
+                    _ if s.the_world.dub == dubs::Dub::Custom => {
+                        vec![(0.0, dubs::Clip::new("custom_tick.mp3", 0.0, 3600.0))]
+                    }
                     _ => vec![(0.0, dubs::TICK)],
                 };
                 if clips.is_empty() {
                     (self.ui)(UiMsg::Notice(
-                        "That sound is switched off or its file is missing (sounds\\theworld)".into(),
+                        "That sound is switched off or its file is missing (sounds\\theworld)"
+                            .into(),
                     ));
                 }
                 self.audio.send(AudioCmd::TwPreview(clips));
@@ -684,6 +814,10 @@ impl Engine {
         match action {
             TrayAction::ToggleMaster => s.master_enabled = !s.master_enabled,
             TrayAction::Preset(p) => s.preset = p,
+            TrayAction::ToggleActive if self.settings.effect == EffectKind::MadeInHeaven => {
+                self.mih_press(now, true);
+                return;
+            }
             TrayAction::ToggleActive if self.settings.effect == EffectKind::TheWorld => {
                 self.tw_press(now);
                 return;
@@ -717,6 +851,28 @@ impl Engine {
                     self.on_transition(tr, now);
                 }
             }
+            if s.effect != EffectKind::MadeInHeaven || !s.master_enabled {
+                self.mih_force_end(now, false);
+            }
+        }
+        if !s.made_in_heaven.enabled
+            || old.made_in_heaven.activation != s.made_in_heaven.activation
+            || old.made_in_heaven.mode != s.made_in_heaven.mode
+        {
+            self.mih_force_end(now, false);
+        }
+        if old.made_in_heaven != s.made_in_heaven {
+            self.mih.controller.reconfigure(&s.made_in_heaven, now);
+            self.audio
+                .send(AudioCmd::SetMihEnabled(s.made_in_heaven.sfx));
+            self.audio
+                .send(AudioCmd::SetMihVolume(s.made_in_heaven.volume));
+            if !s.made_in_heaven.real_acceleration {
+                self.hooks.acceleration.disable();
+                self.mih_real_since = None;
+            } else if !old.made_in_heaven.real_acceleration && self.mih.is_busy() {
+                self.arm_mih_pointer(now);
+            }
         }
         if old.master_enabled != s.master_enabled {
             if let Some(tr) = self.machine.set_master(s.master_enabled) {
@@ -735,7 +891,8 @@ impl Engine {
         if old.audio != s.audio || old.preset != s.preset {
             self.audio.send(AudioCmd::SetEnabled(s.audio.enabled));
             self.audio.send(AudioCmd::SetVolume(s.audio.volume));
-            self.audio.send(AudioCmd::SetMoveVolume(s.audio.move_volume));
+            self.audio
+                .send(AudioCmd::SetMoveVolume(s.audio.move_volume));
             self.audio.send(AudioCmd::SetMode(s.audio.mode));
             self.audio.send(AudioCmd::SetSvParts(sv_parts(s)));
             let profile: SfxProfile = style_for(s).sfx;
@@ -749,9 +906,11 @@ impl Engine {
             }
         }
         let (ri, ro) = (self.cfg.ramp_in, self.cfg.ramp_out);
-        let lock = self.machine.is_active() && self.settings.keep_arrow_cursor;
+        let lock =
+            (self.machine.is_active() || self.mih.is_busy()) && self.settings.keep_arrow_cursor;
         self.set_cursor_lock(lock);
         self.cfg = effect_config(&self.settings);
+        self.mih_cfg = heaven_config(&self.settings);
         self.cfg.ramp_in = ri;
         self.cfg.ramp_out = ro;
         self.publish_hook_state();
@@ -766,14 +925,18 @@ impl Engine {
     fn publish_hook_state(&self) {
         let s = &self.settings;
         self.hooks.set_bindings(Bindings {
-            activation: s.activation,
+            activation: s.active_shortcut(),
             dash: s.dash,
             consume_mouse: s.consume_mouse_buttons,
+            dash_enabled: s.effect != EffectKind::MadeInHeaven,
+            release_on_modifier_up: s.effect == EffectKind::MadeInHeaven
+                && s.made_in_heaven.mode == TimeStopMode::Hold,
         });
         self.hooks.master.store(s.master_enabled, Ordering::Release);
-        self.hooks
-            .wake_on_move
-            .store(self.machine.is_active() || !self.tw.is_idle(), Ordering::Release);
+        self.hooks.wake_on_move.store(
+            self.machine.is_active() || !self.tw.is_idle() || self.mih.is_busy(),
+            Ordering::Release,
+        );
     }
 
     // ---------------------------------------------------------------- behaviours
@@ -784,6 +947,8 @@ impl Engine {
             .unwrap_or(Vec2::ZERO);
         match tr {
             Transition::Activated => {
+                self.mih_force_end(now, false);
+                native::boost_mouse_speed(self.settings.mouse_boost);
                 self.ensure_overlay();
                 self.tracker.push(pos, now, false);
                 self.frames_since_activation = 0;
@@ -798,7 +963,8 @@ impl Engine {
                         // as long as the sound and colour floods back during its fade-out tail.
                         self.cfg.ramp_in = 0.75;
                         self.cfg.ramp_out = 0.95;
-                        self.auto_end_at = Some(now + len.saturating_sub(Duration::from_millis(950)));
+                        self.auto_end_at =
+                            Some(now + len.saturating_sub(Duration::from_millis(950)));
                     }
                     Some(_) => {
                         // Split sound: drain synced to the start hit (peaks ~0.55 s in), colour
@@ -819,6 +985,7 @@ impl Engine {
                 self.next_frame = now;
             }
             Transition::Deactivated => {
+                native::boost_mouse_speed(false);
                 self.effects.deactivate(pos, now);
                 self.auto_end_at = None;
                 self.audio.send(AudioCmd::End {
@@ -828,6 +995,7 @@ impl Engine {
                 self.natural_end = false;
             }
             Transition::Overheated => {
+                native::boost_mouse_speed(false);
                 self.effects.deactivate(pos, now);
                 self.auto_end_at = None;
                 self.full_track = false;
@@ -835,10 +1003,12 @@ impl Engine {
             }
             Transition::CooldownComplete => self.audio.play(Sfx::Cooldown),
         }
-        self.hooks
-            .wake_on_move
-            .store(self.machine.is_active(), Ordering::Release);
-        let lock = self.machine.is_active() && self.settings.keep_arrow_cursor;
+        self.hooks.wake_on_move.store(
+            self.machine.is_active() || self.mih.is_busy(),
+            Ordering::Release,
+        );
+        let lock =
+            (self.machine.is_active() || self.mih.is_busy()) && self.settings.keep_arrow_cursor;
         self.set_cursor_lock(lock);
         self.last_status = None;
     }
@@ -859,9 +1029,14 @@ impl Engine {
     fn emergency(&mut self, now: Instant) {
         tracing::warn!("emergency disable triggered");
         self.end_recording();
+        self.hooks.acceleration.disable();
+        self.mih_real_since = None;
+        self.mih.clear();
+        self.audio.send(AudioCmd::MihStopAll { immediate: true });
         let was_active = self.machine.is_active();
         self.tw_force_end(now, false);
         self.machine.emergency_stop();
+        native::boost_mouse_speed(false);
         self.set_cursor_lock(false);
         self.settings.master_enabled = false;
         self.effects.clear();
@@ -886,12 +1061,139 @@ impl Engine {
         self.push_status();
     }
 
+    // ----------------------------------------------------------- Made in Heaven
+
+    fn arm_mih_pointer(&mut self, now: Instant) {
+        self.hooks.acceleration.arm();
+        self.mih_real_since = Some(now);
+    }
+
+    fn mih_press(&mut self, now: Instant, tray_toggle: bool) {
+        if !self.machine.master() || !self.settings.made_in_heaven.enabled {
+            return;
+        }
+        let events = if tray_toggle {
+            self.mih
+                .controller
+                .toggle(now, &self.settings.made_in_heaven)
+        } else {
+            self.mih
+                .controller
+                .press(now, &self.settings.made_in_heaven)
+        };
+        self.mih_events(events, now, true);
+    }
+
+    fn mih_events(&mut self, events: MihEvents, now: Instant, react_visuals: bool) {
+        let pos = native::cursor_pos()
+            .or_else(|| self.tracker.current())
+            .unwrap_or(Vec2::ZERO);
+        if react_visuals {
+            self.mih.react(events, now, pos, &self.mih_cfg);
+        }
+        for event in events {
+            match event {
+                MihEvent::Activated => {
+                    // The same exclusive-effect rule as The World; no competing input owner.
+                    if let Some(transition) = self.machine.deactivate() {
+                        self.on_transition(transition, now);
+                    }
+                    self.tw_force_end(now, true);
+                    native::boost_mouse_speed(false);
+                    self.effects.clear();
+                    self.tracker.clear();
+                    self.hooks.clear_moves();
+                    self.tracker.push(pos, now, false);
+                    self.ensure_overlay();
+                    if self.settings.made_in_heaven.real_acceleration {
+                        self.arm_mih_pointer(now);
+                    }
+                    self.audio.send(AudioCmd::MihPlay(MihSound::Activation));
+                    tracing::info!("Made in Heaven: acceleration cycle started");
+                }
+                MihEvent::Acceleration => {
+                    self.audio.send(AudioCmd::MihPlay(MihSound::Acceleration))
+                }
+                MihEvent::Maximum => self.audio.send(AudioCmd::MihPlay(MihSound::Maximum)),
+                MihEvent::Reset => {
+                    self.audio.send(AudioCmd::MihPlay(MihSound::UniverseReset));
+                    tracing::info!("Made in Heaven: Universe Reset");
+                }
+                MihEvent::Deactivated => {
+                    self.audio.send(AudioCmd::MihStopAll { immediate: false });
+                    self.audio.send(AudioCmd::MihPlay(MihSound::Deactivation));
+                }
+                MihEvent::Finished => {
+                    self.hooks.acceleration.disable();
+                    self.mih_real_since = None;
+                    self.audio.send(AudioCmd::MihFinish);
+                }
+            }
+        }
+        self.hooks.wake_on_move.store(
+            self.machine.is_active() || !self.tw.is_idle() || self.mih.is_busy(),
+            Ordering::Release,
+        );
+        self.set_cursor_lock(
+            (self.machine.is_active() || self.mih.is_busy()) && self.settings.keep_arrow_cursor,
+        );
+        self.next_frame = now;
+        self.last_status = None;
+    }
+
+    fn update_mih(&mut self, now: Instant) {
+        let events = self.mih.update(now, &self.tracker, &self.mih_cfg);
+        if events.into_iter().next().is_some() {
+            self.mih_events(events, now, false);
+        }
+        if self.mih.is_busy()
+            && self.settings.made_in_heaven.real_acceleration
+            && self.settings.master_enabled
+        {
+            let snapshot = self.mih.snapshot(now);
+            // Switching real acceleration on mid-cycle also has a short, safe soft start.
+            let start = self
+                .mih_real_since
+                .map(|at| (now.saturating_duration_since(at).as_secs_f32() / 0.35).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            let start = start * start * (3.0 - 2.0 * start);
+            self.hooks
+                .acceleration
+                .publish(1.0 + (snapshot.multiplier - 1.0) * start, now);
+        }
+        if self.hooks.acceleration.take_failure() {
+            (self.ui)(UiMsg::Notice("MIH pointer acceleration is unavailable here; visuals remain active. Try again on your normal desktop. Emergency off: Ctrl + Alt + Shift + F12".into()));
+        }
+    }
+
+    fn mih_force_end(&mut self, now: Instant, immediate: bool) {
+        self.hooks.acceleration.disable();
+        self.mih_real_since = None;
+        // A completed reset may still be finishing its original recording.
+        // Switching effects/master off must fade that too, even with no VFX left.
+        self.audio.send(AudioCmd::MihStopAll { immediate });
+        if self.mih.is_busy() || self.mih.is_animating(now) {
+            if immediate {
+                self.mih.clear();
+            } else {
+                self.mih.force_stop(now);
+            }
+            self.next_frame = now;
+            self.last_status = None;
+        }
+    }
+
     // ---------------------------------------------------------------- The World
 
     fn tw_options(&self) -> TwOptions {
         let t = &self.settings.the_world;
         let reduced = self.settings.performance.performance_mode;
         TwOptions {
+            dub: t.dub,
+            custom_primary: crate::settings::presets::parse_hex(&t.custom_primary)
+                .unwrap_or([0.91, 0.36, 1.0]),
+            custom_secondary: crate::settings::presets::parse_hex(&t.custom_secondary)
+                .unwrap_or([0.38, 0.22, 0.78]),
             mode: t.mode,
             duration: f32::from(t.duration_secs),
             max_secs: t.max_secs as f32,
@@ -922,6 +1224,7 @@ impl Engine {
     }
 
     fn tw_start(&mut self, now: Instant) {
+        self.mih_force_end(now, false);
         if let Some(tr) = self.machine.deactivate() {
             self.on_transition(tr, now);
         }
@@ -951,7 +1254,8 @@ impl Engine {
                 r: 1920.0,
                 b: 1080.0,
             });
-        self.tw.begin(now, center, plan.moment, self.tw_options(), mon);
+        self.tw
+            .begin(now, center, plan.moment, self.tw_options(), mon);
         self.ensure_overlay();
         if let Some(o) = self.overlay.as_mut() {
             o.prewarm();
@@ -979,6 +1283,9 @@ impl Engine {
         if !plan.clips.is_empty() {
             self.audio.send(AudioCmd::TwPlay(plan.clips.clone()));
         }
+        if let Some(p) = native::cursor_pos() {
+            self.tw.drag_to(p, now);
+        }
         self.tw.request_resume(now, plan.moment);
         let hwnd = self.overlay.as_ref().map(|o| o.hwnd_raw()).unwrap_or(0);
         self.watchdog.arm(
@@ -1001,7 +1308,14 @@ impl Engine {
                 TwEvent::Freeze => self.tw_freeze(now),
                 TwEvent::Tick(_) => {
                     if self.settings.audio.enabled && self.settings.the_world.ticks {
-                        self.audio.send(AudioCmd::TwTick);
+                        if self.settings.the_world.dub == dubs::Dub::Custom {
+                            self.audio.send(AudioCmd::TwPlay(vec![(
+                                0.0,
+                                dubs::Clip::new("custom_tick.mp3", 0.0, 3600.0),
+                            )]));
+                        } else {
+                            self.audio.send(AudioCmd::TwTick);
+                        }
                     }
                 }
                 TwEvent::AutoResume => self.tw_resume(now),
@@ -1026,7 +1340,8 @@ impl Engine {
             self.tw.abort(now);
             self.audio.send(AudioCmd::TwStopAll);
             (self.ui)(UiMsg::Notice(
-                "The World needs screen capture (Windows 10 2004+, not on the secure desktop)".into(),
+                "The World needs screen capture (Windows 10 2004+, not on the secure desktop)"
+                    .into(),
             ));
             return;
         }
@@ -1035,7 +1350,10 @@ impl Engine {
         } else {
             Vec::new()
         };
-        tracing::info!("The World: time stopped ({} movable windows)", windows.len());
+        tracing::info!(
+            "The World: time stopped ({} movable windows)",
+            windows.len()
+        );
         // The animation starts from *after* the capture, so nothing jumps ahead.
         let now = Instant::now();
         self.tw.frozen(now, windows, &self.cfg);
@@ -1053,7 +1371,13 @@ impl Engine {
 
     /// Time starts again: move the windows, show the live desktop, give input back.
     fn tw_unfreeze(&mut self, now: Instant, apply: bool) {
-        let moves = self.tw.pending_moves();
+        if apply {
+            if let Some(p) = native::cursor_pos() {
+                self.tw.drag_to(p, now);
+            }
+            self.tw.release();
+        }
+        let moves = self.tw.move_targets();
         // Input first: never keep the desktop blocked longer than necessary.
         self.hooks.time_stopped.store(false, Ordering::Release);
         self.watchdog.arm(None, 0);
@@ -1097,6 +1421,9 @@ impl Engine {
     }
 
     fn try_dash(&mut self, now: Instant) {
+        if self.settings.effect == EffectKind::MadeInHeaven || self.mih.is_busy() {
+            return;
+        }
         if !self.settings.effects.warp_dash || !self.machine.can_dash() || now < self.dash_ready_at
         {
             return;
@@ -1147,7 +1474,26 @@ impl Engine {
             return;
         }
         if let Err(e) = sc.validate() {
-            (self.ui)(UiMsg::Notice(format!("Can't use \"{}\": {e}", sc.display())));
+            (self.ui)(UiMsg::Notice(format!(
+                "Can't use \"{}\": {e}",
+                sc.display()
+            )));
+            return;
+        }
+        if which == RECORD_ACTIVATION && self.settings.effect == EffectKind::MadeInHeaven {
+            self.settings.made_in_heaven.activation = sc;
+            self.publish_hook_state();
+            self.mark_dirty(Instant::now());
+            (self.ui)(UiMsg::Settings(Box::new(self.settings.clone())));
+            (self.ui)(UiMsg::Notice(format!(
+                "Made in Heaven shortcut set: {}{}",
+                sc.display(),
+                if sc.is_typing_key() {
+                    " (also fires while typing; consider Ctrl/Alt)"
+                } else {
+                    ""
+                }
+            )));
             return;
         }
         let (mine, other) = if which == RECORD_ACTIVATION {
@@ -1201,7 +1547,18 @@ impl Engine {
     // ---------------------------------------------------------------- status / persistence
 
     fn push_status(&mut self) {
-        let state = if self.tw.is_idle() {
+        let state = if !self.machine.master() {
+            SysState::Offline
+        } else if self.mih.is_busy() {
+            match self.mih.snapshot(Instant::now()).phase {
+                MihPhase::Awakening => SysState::Awakening,
+                MihPhase::TimeAcceleration => SysState::TimeAccelerating,
+                MihPhase::HeavenAscended => SysState::HeavenAscended,
+                MihPhase::UniverseReset => SysState::UniverseReset,
+                MihPhase::Decelerating => SysState::Decelerating,
+                MihPhase::Inactive => SysState::Ready,
+            }
+        } else if self.tw.is_idle() {
             self.machine.state()
         } else {
             SysState::TimeStopped
@@ -1236,6 +1593,8 @@ impl Engine {
 
     fn shutdown(&mut self) {
         tracing::info!("engine shutting down");
+        self.mih_force_end(Instant::now(), true);
+        native::boost_mouse_speed(false);
         self.tw_force_end(Instant::now(), true);
         self.end_recording();
         self.set_cursor_lock(false);
@@ -1248,6 +1607,21 @@ impl Engine {
         self.overlay = None; // destroys the window and releases GPU objects
         self.save_now();
         self.audio.shutdown();
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // Also covers unwinding, disconnected channels and partial shutdown.
+        self.hooks.acceleration.disable();
+        self.hooks.master.store(false, Ordering::Release);
+        self.hooks.time_stopped.store(false, Ordering::Release);
+        self.watchdog.arm(None, 0);
+        native::boost_mouse_speed(false);
+        if self.cursors_locked {
+            native::restore_system_cursors();
+        }
+        self.audio.send(AudioCmd::MihStopAll { immediate: true });
     }
 }
 
@@ -1280,7 +1654,10 @@ pub fn render_test(dir: &std::path::Path) -> anyhow::Result<()> {
     let dt = Duration::from_millis(16);
     let path = |f: f32| -> Vec2 {
         let c = origin + size * 0.5;
-        c + Vec2::new((f * 2.1).cos() * size.x * 0.28, (f * 3.3).sin() * size.y * 0.22)
+        c + Vec2::new(
+            (f * 2.1).cos() * size.x * 0.28,
+            (f * 3.3).sin() * size.y * 0.22,
+        )
     };
     overlay.set_visible(true);
     let mut saved = Vec::new();
@@ -1288,7 +1665,12 @@ pub fn render_test(dir: &std::path::Path) -> anyhow::Result<()> {
     for frame in 0..150u32 {
         let now = t0 + dt * frame;
         // A fast flick between frames 95 and 115 (dense afterimages + speed burst).
-        f += 0.016 * if (95..=115).contains(&frame) { 4.0 } else { 1.0 };
+        f += 0.016
+            * if (95..=115).contains(&frame) {
+                4.0
+            } else {
+                1.0
+            };
         tracker.push(path(f), now, false);
         if frame == 2 {
             fx.activate(path(f), now, &cfg);
@@ -1331,12 +1713,173 @@ pub fn render_test(dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Real D3D11/HDR MIH diagnostic. Uses a synthetic, timestamped cursor history;
+/// never installs hooks, changes pointer speed, plays sounds or saves user settings.
+pub fn render_test_mih(dir: &std::path::Path, measure: bool) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut overlay = Overlay::create()?;
+    let settings = Settings::default();
+    let mut cfg = heaven_config(&settings);
+    cfg.hdr = overlay.hdr_available();
+    cfg.scale = native::cursor_scale();
+    if let Some(handle) = native::arrow_cursor_handle()
+        && let Some(image) = native::capture_cursor(handle)
+    {
+        overlay.set_cursor(&image);
+        cfg.cursor = Some(crate::effects::CursorSprite {
+            size: Vec2::new(image.width as f32, image.height as f32),
+            hotspot: image.hotspot,
+        });
+    }
+    let origin = overlay.origin();
+    let size = overlay.size();
+    let monitor = native::monitors()
+        .into_iter()
+        .find(|m| m.contains(origin + size * 0.5))
+        .unwrap_or(Rect {
+            left: origin.x,
+            top: origin.y,
+            right: origin.x + size.x,
+            bottom: origin.y + size.y,
+        });
+    let center = Vec2::new(
+        (monitor.left + monitor.right) * 0.5,
+        (monitor.top + monitor.bottom) * 0.5,
+    );
+    let reach = Vec2::new(
+        (monitor.right - monitor.left) * 0.20,
+        (monitor.bottom - monitor.top) * 0.19,
+    );
+    let mut fx = MadeInHeaven::default();
+    let mut tracker = CursorTracker::new();
+    let mut batch = Batch::new(origin, size);
+    let start = Instant::now();
+    let events = fx.controller.press(start, &settings.made_in_heaven);
+    fx.react(events, start, center, &cfg);
+    let end = settings.made_in_heaven.ramp_up_secs + settings.made_in_heaven.reset_secs + 0.5;
+    let mut sample_time = 0.0f32;
+    let mut path_time = 0.0f32;
+    let mut frames = 0u32;
+    let mut saved = 0usize;
+    let mut max_vertices = 0usize;
+    let mut timing = Vec::with_capacity(4096);
+    let mut simulation_ms = Vec::with_capacity(4096);
+    let mut previous_frame = Instant::now();
+    let checkpoints = [
+        (2.0, "awakening"),
+        (10.0, "time-acceleration"),
+        (18.0, "heaven-ascended"),
+        (20.16, "reset-flash"),
+        (20.50, "reset-shockwave"),
+        (21.0, "reset-fade"),
+        (21.8, "inactive"),
+    ];
+    let mut checkpoint = 0usize;
+    overlay.set_visible(true);
+    loop {
+        let elapsed = if measure {
+            start.elapsed().as_secs_f32()
+        } else {
+            frames as f32 / 60.0
+        };
+        let now = start + Duration::from_secs_f32(elapsed);
+        if measure && frames > 0 {
+            timing.push(previous_frame.elapsed().as_secs_f32() * 1000.0);
+        }
+        previous_frame = Instant::now();
+        let simulation_start = Instant::now();
+        // 250 Hz synthetic input, independent of presentation FPS. Path animation
+        // accelerates with the real clock, like the supported MIH particle/pulse effects.
+        while sample_time <= elapsed {
+            let time = start + Duration::from_secs_f32(sample_time);
+            path_time += 0.004 * fx.snapshot(time).multiplier;
+            tracker.push(
+                center + Vec2::new((path_time * 1.8).sin(), (path_time * 2.7).cos()) * reach,
+                time,
+                false,
+            );
+            sample_time += 0.004;
+        }
+        let events = fx.update(now, &tracker, &cfg);
+        for event in events {
+            tracing::info!("MIH render diagnostic {elapsed:.3}s: {event:?}");
+        }
+        batch.reset(origin, size);
+        fx.draw(&mut batch, &tracker, now, &cfg, monitor);
+        // Include the synthetic real cursor in saved frames for visual inspection.
+        if fx.is_busy()
+            && let (Some(pos), Some(cursor)) = (tracker.current(), cfg.cursor)
+        {
+            batch.sprite(pos - cursor.hotspot, cursor.size, [1.0; 3], 1.0, 0.0);
+        }
+        max_vertices = max_vertices.max(batch.verts.len());
+        if measure {
+            simulation_ms.push(simulation_start.elapsed().as_secs_f32() * 1000.0);
+        }
+        overlay.pump();
+        let grade = Grade {
+            time: elapsed,
+            bloom: cfg.hdr,
+            bloom_strength: 0.48,
+            film: false,
+            grain: 0.0,
+        };
+        anyhow::ensure!(
+            overlay.render(&batch, None, &[], &grade) != FrameResult::DeviceLost,
+            "MIH diagnostic lost its GPU device"
+        );
+        if !measure && checkpoint < checkpoints.len() && elapsed >= checkpoints[checkpoint].0 {
+            let path = dir.join(format!("mih_{}.bmp", checkpoints[checkpoint].1));
+            overlay.dump_bmp(&path)?;
+            checkpoint += 1;
+            saved += 1;
+        }
+        frames += 1;
+        if elapsed >= end {
+            break;
+        }
+    }
+    anyhow::ensure!(
+        !fx.is_busy()
+            && (fx.snapshot(start + Duration::from_secs_f32(end)).multiplier - 1.0).abs() < 0.0001,
+        "MIH diagnostic did not restore its multiplier"
+    );
+    anyhow::ensure!(
+        batch.is_empty(),
+        "MIH diagnostic left visual resources active after reset"
+    );
+    overlay.set_visible(false);
+    let mut report = format!(
+        "MIH GPU cycle passed: {frames} frames, {saved} images, HDR {}, maximum {max_vertices} vertices, final multiplier 1.0x, no real input modified",
+        cfg.hdr
+    );
+    if measure && !timing.is_empty() {
+        timing.sort_by(f32::total_cmp);
+        simulation_ms.sort_by(f32::total_cmp);
+        let avg = timing.iter().sum::<f32>() / timing.len() as f32;
+        let p99 = timing[(timing.len() * 99 / 100).min(timing.len() - 1)];
+        let cpu99 = simulation_ms[(simulation_ms.len() * 99 / 100).min(simulation_ms.len() - 1)];
+        report.push_str(&format!("\nFrame pacing: avg {avg:.3} ms ({:.1} FPS), p99 {p99:.3} ms; CPU simulation + geometry p99 {cpu99:.3} ms", 1000.0 / avg));
+    }
+    std::fs::write(dir.join("timing.txt"), &report)?;
+    tracing::info!("{report}");
+    Ok(())
+}
+
 /// Visual check of The World (`cursorfect.exe --render-test-tw <folder>`): stops time through
 /// the real overlay, drags the topmost window's frozen image (the real window is never moved),
 /// resumes, and saves frames as .bmp.
-pub fn render_test_tw(dir: &std::path::Path, measure: bool) -> anyhow::Result<()> {
+pub fn render_test_tw(
+    dir: &std::path::Path,
+    measure: bool,
+    demo: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut overlay = Overlay::create()?;
+    if let Some(path) = demo {
+        let (bgra, width, height) = load_bmp(path)?;
+        overlay.set_demo_desktop(&bgra, width, height)?;
+    }
     let settings = Settings::default();
     let mut cfg = effect_config(&settings);
     cfg.world_supported = overlay.world_supported();
@@ -1357,9 +1900,24 @@ pub fn render_test_tw(dir: &std::path::Path, measure: bool) -> anyhow::Result<()
     const C: u32 = 119;
     tw.begin(t0, center, 1.9, TwOptions::default(), mon);
     overlay.set_visible(true);
-    let windows = wm::top_level_windows();
+    let windows = if demo.is_some() {
+        vec![wm::WinInfo {
+            hwnd: 1,
+            class: "SyntheticTestWindow".into(),
+            rect: WinRect {
+                l: origin.x + 160.0,
+                t: origin.y + 140.0,
+                r: origin.x + 780.0,
+                b: origin.y + 570.0,
+            },
+        }]
+    } else {
+        wm::top_level_windows()
+    };
     tracing::info!("render test tw: {} movable windows", windows.len());
-    let grab = windows.first().map(|w| Vec2::new((w.rect.l + w.rect.r) * 0.5, w.rect.t + 15.0));
+    let grab = windows
+        .first()
+        .map(|w| Vec2::new((w.rect.l + w.rect.r) * 0.5, w.rect.t + 15.0));
     let dt = Duration::from_millis(16);
     let mut saved = 0;
     let mut times: Vec<f32> = Vec::new();
@@ -1400,7 +1958,12 @@ pub fn render_test_tw(dir: &std::path::Path, measure: bool) -> anyhow::Result<()
                         anyhow::bail!("screen capture failed");
                     }
                     freeze_ms = f0.elapsed().as_secs_f32() * 1000.0;
-                    tw.frozen(Instant::now(), windows.clone(), &cfg);
+                    // Offline diagnostics must use their own simulation clock too.
+                    tw.frozen(
+                        if measure { Instant::now() } else { now },
+                        windows.clone(),
+                        &cfg,
+                    );
                 }
                 TwEvent::Unfreeze => {
                     overlay.unfreeze();
@@ -1419,7 +1982,9 @@ pub fn render_test_tw(dir: &std::path::Path, measure: bool) -> anyhow::Result<()
         };
         overlay.pump();
         let _ = overlay.render(&batch, world.as_ref(), &crops, &grade);
-        if !measure && [40u32, 85, 108, 116, C + 6, C + 16, C + 80, C + 115, C + 158].contains(&frame) {
+        if !measure
+            && [40u32, 85, 108, 116, C + 6, C + 16, C + 80, C + 115, C + 158].contains(&frame)
+        {
             overlay.dump_bmp(&dir.join(format!("tw_{frame:03}.bmp")))?;
             saved += 1;
         }
@@ -1432,7 +1997,10 @@ pub fn render_test_tw(dir: &std::path::Path, measure: bool) -> anyhow::Result<()
         let mut sorted = times.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let avg = times.iter().sum::<f32>() / times.len().max(1) as f32;
-        let p99 = sorted[(sorted.len() as f32 * 0.99) as usize..].first().copied().unwrap_or(0.0);
+        let p99 = sorted[(sorted.len() as f32 * 0.99) as usize..]
+            .first()
+            .copied()
+            .unwrap_or(0.0);
         let max = sorted.last().copied().unwrap_or(0.0);
         let over = times.iter().filter(|t| **t > avg * 1.6).count();
         let report = format!(
@@ -1510,7 +2078,13 @@ pub fn demo_shots(
     let dt = Duration::from_secs_f32(1.0 / 60.0);
     let draw_cursor = |batch: &mut Batch, p: Vec2| {
         if let Some(cs) = sprite {
-            batch.sprite(p - cs.hotspot * 1.35, cs.size * 1.35, [1.0, 1.0, 1.0], 1.0, 0.0);
+            batch.sprite(
+                p - cs.hotspot * 1.35,
+                cs.size * 1.35,
+                [1.0, 1.0, 1.0],
+                1.0,
+                0.0,
+            );
         }
     };
     let idle_world = |c: Vec2, look: Look| World {
@@ -1667,6 +2241,8 @@ pub fn demo_shots(
                     tint: 1.0,
                     chroma: 0.0,
                     pinch: 0.0,
+                    primary: crate::effects::the_world::palette(crate::audio::dubs::Dub::DioJp).0,
+                    secondary: crate::effects::the_world::palette(crate::audio::dubs::Dub::DioJp).1,
                 },
             )
         });
@@ -1675,6 +2251,12 @@ pub fn demo_shots(
             overlay.dump_bmp(&dir.join(format!("tw_{:03}.bmp", frame / 2)))?;
         }
     }
-    tracing::info!("demo shots saved to {} (moved window shown: {swapped})", dir.display());
+    tracing::info!(
+        "demo shots saved to {} (moved window shown: {swapped})",
+        dir.display()
+    );
     Ok(())
 }
+
+#[cfg(test)]
+mod integration_tests;

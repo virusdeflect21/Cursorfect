@@ -151,6 +151,87 @@ impl Particles {
         }
     }
 
+    /// Bounded directional emission for MIH. Even at rest it occasionally sheds
+    /// a tiny mote; increasing acceleration raises both density and velocity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_heaven(
+        &mut self,
+        pos: Vec2,
+        dir: Vec2,
+        speed: f32,
+        dt: f32,
+        progress: f32,
+        cfg: &Config,
+        rng: &mut Rng,
+    ) {
+        let cap = Self::cap(cfg).min(180);
+        if cap == 0 || cfg.intensity <= 0.0 {
+            self.accum = 0.0;
+            return;
+        }
+        let moving = (speed / 1600.0).clamp(0.0, 1.0);
+        let rate = (2.0 + moving * (8.0 + 85.0 * progress * progress)) * cfg.intensity;
+        self.accum = (self.accum + rate * dt.min(0.15)).min(24.0);
+        let dir = dir.normalize_or(Vec2::X);
+        let perp = Vec2::new(-dir.y, dir.x);
+        while self.accum >= 1.0 {
+            self.accum -= 1.0;
+            let jitter = rng.range(-1.0, 1.0);
+            self.push(
+                Particle {
+                    pos: pos - dir * rng.range(2.0, 12.0) * cfg.scale
+                        + perp * jitter * 6.0 * cfg.scale,
+                    vel: -dir * rng.range(30.0, 100.0 + 160.0 * progress)
+                        + perp * jitter * rng.range(20.0, 80.0),
+                    age: 0.0,
+                    life: rng.range(0.30, 0.65),
+                    size: rng.range(0.65, 1.65) * cfg.scale.max(0.75),
+                    alt_color: rng.unit() > 0.65,
+                },
+                cap,
+            );
+        }
+    }
+
+    pub fn draw_heaven(&self, batch: &mut Batch, cfg: &Config, opacity: f32) {
+        for p in &self.pool {
+            let a = p.opacity().powf(1.4) * opacity * cfg.intensity;
+            if a <= 0.003 {
+                continue;
+            }
+            let color = if p.alt_color {
+                [0.92, 1.0, 1.0]
+            } else {
+                [0.24, 0.88, 1.0]
+            };
+            let tail = p.vel.clamp_length_max(1000.0) * 0.035;
+            let pts = [
+                RibbonPoint {
+                    pos: p.pos - tail,
+                    half_width: p.size * 0.3,
+                    alpha: 0.0,
+                },
+                RibbonPoint {
+                    pos: p.pos,
+                    half_width: p.size,
+                    alpha: a * 0.8,
+                },
+            ];
+            batch.ribbon(&pts, cfg.hot(color, 1.8), 0.85);
+            if !cfg.performance_mode {
+                batch.disc(p.pos, p.size * 4.0, color, a * 0.22, 1.0);
+            }
+            batch.disc_sharp(
+                p.pos,
+                p.size * 1.5,
+                cfg.hot([1.0; 3], 2.0),
+                a * 0.7,
+                1.0,
+                6.0,
+            );
+        }
+    }
+
     pub fn draw(&self, batch: &mut Batch, cfg: &Config) {
         let st = &cfg.style;
         for (i, p) in self.pool.iter().enumerate() {

@@ -6,7 +6,10 @@ use rodio::Source;
 fn stats(name: &str, s: &[f32]) {
     let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
     let rms = (s.iter().map(|x| x * x).sum::<f32>() / s.len().max(1) as f32).sqrt();
-    println!("{name:<12} peak {peak:.3}  rms {rms:.3}  ({} samples)", s.len());
+    println!(
+        "{name:<12} peak {peak:.3}  rms {rms:.3}  ({} samples)",
+        s.len()
+    );
 }
 
 fn main() {

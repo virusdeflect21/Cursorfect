@@ -3,7 +3,7 @@
 CursorFect ships **without** sound files. Every sound people associate with these effects is
 someone else's copyrighted audio, so you add your own. Put the files here (next to the exe:
 `sounds\`) or in `%APPDATA%\CursorFect\sounds\`. The app's **Open sounds folder** button opens
-that one. MP3, WAV, OGG and FLAC all work.
+that one. This build enables MP3 and WAV decoding.
 
 Missing files never stop the app: the Sandevistan falls back to built-in synthesized sounds, and
 The World runs silently, freezing time instantly instead of waiting for a voice line.
@@ -35,3 +35,10 @@ recordings. Other recordings of the same lines may need slightly different timin
 | `jotaro_resume.mp3` | Time-resume SFX without voice (1.8 s) |
 | `diego.mp3` | Diego Brando "THE WORLD", ticks, and his resume line (13 s) |
 | `over_heaven.mp3` | DIO, The World Over Heaven "ZA WARUDO", then the SFX (5.4 s) |
+
+## Made in Heaven (`sounds\mih\` or `MIHassets\` beside the exe)
+
+See the [MIH asset mapping](../../MIHassets/README.md). The existing recordings
+are loaded as one-shots, never substituted with another effect's audio. Missing
+events are silent. Master volume and the relative MIH volume both apply; previews
+use those volumes and replace the previous preview rather than overlapping it.

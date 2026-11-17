@@ -114,18 +114,57 @@ impl Tray {
         let online = state != SysState::Offline;
         self.master
             .set_text(if online { "Disable" } else { "Enable" });
-        self.active.set_text(if state == SysState::Active {
+        self.active.set_text(if state.is_effect_active() {
             "Deactivate"
         } else {
             "Activate"
         });
         self.active
-            .set_enabled(matches!(state, SysState::Ready | SysState::Active));
+            .set_enabled(state == SysState::Ready || state.is_effect_active());
         for (p, item) in &self.presets {
             item.set_checked(*p == preset);
         }
         let _ = self
             ._icon
             .set_tooltip(Some(format!("CursorFect \u{2014} {}", state.label())));
+    }
+
+    /// Native UI diagnostic: verify menu state without clicking or changing settings.
+    pub fn self_test(&self) -> anyhow::Result<()> {
+        for state in [
+            SysState::Offline,
+            SysState::Ready,
+            SysState::Active,
+            SysState::Awakening,
+            SysState::TimeAccelerating,
+            SysState::HeavenAscended,
+            SysState::UniverseReset,
+            SysState::Decelerating,
+        ] {
+            self.update(state, PresetId::David);
+            anyhow::ensure!(
+                self.active.is_enabled() == (state == SysState::Ready || state.is_effect_active()),
+                "tray activation availability mismatch: {state:?}"
+            );
+            anyhow::ensure!(
+                self.active.text()
+                    == if state.is_effect_active() {
+                        "Deactivate"
+                    } else {
+                        "Activate"
+                    },
+                "tray activation label mismatch: {state:?}"
+            );
+            anyhow::ensure!(
+                self.master.text()
+                    == if state == SysState::Offline {
+                        "Enable"
+                    } else {
+                        "Disable"
+                    },
+                "tray master label mismatch: {state:?}"
+            );
+        }
+        Ok(())
     }
 }

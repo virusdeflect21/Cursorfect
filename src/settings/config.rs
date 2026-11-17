@@ -15,9 +15,10 @@ pub enum EffectKind {
     #[default]
     Sandevistan,
     TheWorld,
+    MadeInHeaven,
 }
 
-/// How a time stop ends.
+/// Hold / toggle / timed activation (The World and Made in Heaven).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimeStopMode {
     /// Time is stopped while the shortcut is held.
@@ -29,6 +30,76 @@ pub enum TimeStopMode {
     Timed,
 }
 
+/// MIH has independent controls; adding it never changes either existing shortcut.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MadeInHeavenSettings {
+    pub enabled: bool,
+    pub activation: Shortcut,
+    pub mode: TimeStopMode,
+    /// Overall activation limit in Timed mode, including repeated cycles.
+    pub duration_secs: f32,
+    /// Optional screen-space pointer multiplier, not a Windows sensitivity setting.
+    pub real_acceleration: bool,
+    pub repeat_after_reset: bool,
+    pub max_multiplier: f32,
+    pub ramp_up_secs: f32,
+    pub deceleration_secs: f32,
+    pub reset_secs: f32,
+    pub afterimages: bool,
+    pub motion_trails: bool,
+    pub speed_particles: bool,
+    pub heaven_aura: bool,
+    pub reset_flash: bool,
+    pub indicator: bool,
+    /// 0..=100, independent of the Sandevistan look.
+    pub intensity: u8,
+    pub sfx: bool,
+    /// Relative to the existing master audio volume; 100 preserves that volume.
+    pub volume: u8,
+}
+
+impl Default for MadeInHeavenSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            activation: Shortcut::default_activation(),
+            mode: TimeStopMode::Toggle,
+            duration_secs: 20.0,
+            real_acceleration: true,
+            repeat_after_reset: false,
+            max_multiplier: 4.0,
+            ramp_up_secs: 20.0,
+            deceleration_secs: 1.5,
+            reset_secs: 1.5,
+            afterimages: true,
+            motion_trails: true,
+            speed_particles: true,
+            heaven_aura: true,
+            reset_flash: true,
+            indicator: true,
+            intensity: 80,
+            sfx: true,
+            volume: 100,
+        }
+    }
+}
+
+impl MadeInHeavenSettings {
+    pub fn sanitize(&mut self) {
+        self.duration_secs = finite_or(self.duration_secs, 20.0).clamp(1.0, 300.0);
+        self.max_multiplier = finite_or(self.max_multiplier, 4.0).clamp(1.0, 6.0);
+        self.ramp_up_secs = finite_or(self.ramp_up_secs, 20.0).clamp(5.0, 120.0);
+        self.deceleration_secs = finite_or(self.deceleration_secs, 1.5).clamp(0.2, 5.0);
+        self.reset_secs = finite_or(self.reset_secs, 1.5).clamp(0.2, 5.0);
+        self.intensity = self.intensity.min(100);
+        self.volume = self.volume.min(100);
+        if self.activation.validate().is_err() {
+            self.activation = Shortcut::default_activation();
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TheWorldSettings {
@@ -36,6 +107,9 @@ pub struct TheWorldSettings {
     /// Timed mode length, 1..=9 seconds.
     pub duration_secs: u8,
     pub dub: Dub,
+    pub windups: [f32; 7],
+    pub custom_primary: String,
+    pub custom_secondary: String,
     /// "ZA WARUDO!" voice line.
     pub voice: bool,
     /// The time-stop sound effect.
@@ -72,6 +146,9 @@ impl Default for TheWorldSettings {
             mode: TimeStopMode::Toggle,
             duration_secs: 5,
             dub: Dub::DioJp,
+            windups: [-1.0; 7],
+            custom_primary: "#E95BFF".into(),
+            custom_secondary: "#6037C8".into(),
             voice: true,
             stop_sfx: true,
             ticks: true,
@@ -323,9 +400,11 @@ pub struct Settings {
     #[serde(default)]
     pub version: u32,
     pub master_enabled: bool,
+    pub mouse_boost: bool,
     /// Effect triggered by the activation shortcut.
     pub effect: EffectKind,
     pub the_world: TheWorldSettings,
+    pub made_in_heaven: MadeInHeavenSettings,
     pub activation: Shortcut,
     pub activation_mode: ActivationMode,
     /// Swallow the activation/dash mouse buttons so they do not also trigger their normal
@@ -355,8 +434,10 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             master_enabled: false,
+            mouse_boost: false,
             effect: EffectKind::Sandevistan,
             the_world: TheWorldSettings::default(),
+            made_in_heaven: MadeInHeavenSettings::default(),
             activation: Shortcut::default_activation(),
             activation_mode: ActivationMode::Toggle,
             consume_mouse_buttons: true,
@@ -377,7 +458,7 @@ impl Default for Settings {
     }
 }
 
-pub const SETTINGS_VERSION: u32 = 4;
+pub const SETTINGS_VERSION: u32 = 5;
 
 impl Settings {
     /// Upgrade a settings file written by an older version.
@@ -393,12 +474,25 @@ impl Settings {
             // 4 added The World; nothing to convert.
             self.version = 4;
         }
+        if self.version < 5 {
+            // MIH is additive. Serde supplies its defaults without touching old controls.
+            self.version = 5;
+        }
+    }
+
+    pub fn active_shortcut(&self) -> Shortcut {
+        if self.effect == EffectKind::MadeInHeaven {
+            self.made_in_heaven.activation
+        } else {
+            self.activation
+        }
     }
 
     /// Clamp every value into its valid range and repair invalid shortcuts, so a
     /// hand-edited or corrupted file can never put the app in an invalid state.
     pub fn sanitize(&mut self) {
         let d = Settings::default();
+        self.made_in_heaven.sanitize();
         self.intensity = self.intensity.min(100);
         self.ghost_count = self.ghost_count.clamp(1, 20);
         self.ghost_opacity = self.ghost_opacity.min(100);
@@ -410,6 +504,9 @@ impl Settings {
         }
         self.performance.max_particles = self.performance.max_particles.clamp(0, 600);
         self.audio.move_volume = self.audio.move_volume.min(100);
+        for value in &mut self.the_world.windups {
+            *value = finite_or(*value, -1.0).clamp(-1.0, 15.0);
+        }
         self.the_world.duration_secs = self.the_world.duration_secs.clamp(1, 9);
         self.the_world.max_secs = self.the_world.max_secs.clamp(5, 3600);
         let e = &mut self.energy;
@@ -447,7 +544,6 @@ pub fn settings_path() -> Option<PathBuf> {
     // %APPDATA%\CursorFect\settings.json  (Roaming)
     directories::BaseDirs::new().map(|d| d.config_dir().join(APP_DIR).join("settings.json"))
 }
-
 
 /// Parse settings JSON. Invalid JSON yields defaults; a field with an invalid type or
 /// out-of-type value is dropped individually (that field falls back to its default)
@@ -593,10 +689,16 @@ mod tests {
     fn older_files_are_upgraded() {
         let s = parse(r#"{"version": 2, "energy": {"enabled": true}}"#);
         assert_eq!(s.version, SETTINGS_VERSION);
-        assert!(!s.energy.enabled, "toggle must stay on forever after migrating");
+        assert!(
+            !s.energy.enabled,
+            "toggle must stay on forever after migrating"
+        );
         // A deliberately chosen binding survives the migration.
         let k = parse(r#"{"activation": {"trigger": {"Key": 120}, "mods": {}}}"#);
-        assert_eq!(k.activation.trigger, crate::input::shortcuts::Trigger::Key(120));
+        assert_eq!(
+            k.activation.trigger,
+            crate::input::shortcuts::Trigger::Key(120)
+        );
         // Current files are left alone.
         let cur = parse(r#"{"version": 4, "energy": {"enabled": true}}"#);
         assert!(cur.energy.enabled);
@@ -614,12 +716,92 @@ mod tests {
     fn atomic_save_and_reload() {
         let dir = std::env::temp_dir().join(format!("cursorfect-test-{}", std::process::id()));
         let path = dir.join("settings.json");
-        let mut s = Settings::default();
-        s.intensity = 42;
+        let mut s = Settings {
+            intensity: 42,
+            effect: EffectKind::MadeInHeaven,
+            ..Default::default()
+        };
+        s.made_in_heaven.max_multiplier = 5.2;
+        s.made_in_heaven.real_acceleration = false;
+        s.made_in_heaven.repeat_after_reset = true;
         save_to(&s, &path).unwrap();
         assert!(!path.with_extension("json.tmp").exists());
         let text = fs::read_to_string(&path).unwrap();
-        assert_eq!(parse(&text).intensity, 42);
+        assert_eq!(parse(&text), s);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mih_is_additive_to_v110_settings_and_existing_shortcuts() {
+        let old = r##"{"version":4,"effect":"TheWorld","activation":{"trigger":{"Key":120},"mods":{}},"dash":{"trigger":{"Mouse":"X2"},"mods":{"ctrl":true}},"the_world":{"dub":"Custom","duration_secs":7,"custom_primary":"#FF8844"},"audio":{"volume":31},"effects":{"ghosts":false}}"##;
+        let settings = parse(old);
+        assert_eq!(settings.version, SETTINGS_VERSION);
+        assert_eq!(settings.effect, EffectKind::TheWorld);
+        assert_eq!(
+            settings.activation.trigger,
+            crate::input::shortcuts::Trigger::Key(120)
+        );
+        assert_eq!(settings.the_world.dub, Dub::Custom);
+        assert_eq!(settings.the_world.duration_secs, 7);
+        assert_eq!(settings.audio.volume, 31);
+        assert!(!settings.effects.ghosts);
+        assert_eq!(settings.made_in_heaven, MadeInHeavenSettings::default());
+        let activation = settings.activation;
+        let dash = settings.dash;
+        let mut settings = settings;
+        settings.effect = EffectKind::MadeInHeaven;
+        settings.made_in_heaven.activation =
+            Shortcut::key(119, crate::input::shortcuts::Modifiers::NONE);
+        assert_eq!(
+            settings.active_shortcut(),
+            settings.made_in_heaven.activation
+        );
+        assert_eq!(settings.activation, activation);
+        assert_eq!(settings.dash, dash);
+        settings.effect = EffectKind::Sandevistan;
+        assert_eq!(settings.active_shortcut(), activation);
+    }
+
+    #[test]
+    fn mih_settings_roundtrip_and_sanitize_every_control() {
+        let mut settings = Settings {
+            effect: EffectKind::MadeInHeaven,
+            ..Default::default()
+        };
+        let mih = &mut settings.made_in_heaven;
+        mih.mode = TimeStopMode::Timed;
+        mih.duration_secs = 42.0;
+        mih.max_multiplier = 5.5;
+        mih.ramp_up_secs = 45.0;
+        mih.deceleration_secs = 0.8;
+        mih.reset_secs = 1.2;
+        mih.real_acceleration = false;
+        mih.repeat_after_reset = true;
+        mih.afterimages = false;
+        mih.motion_trails = false;
+        mih.speed_particles = false;
+        mih.heaven_aura = false;
+        mih.reset_flash = false;
+        mih.indicator = false;
+        mih.intensity = 33;
+        mih.sfx = false;
+        mih.volume = 24;
+        assert_eq!(parse(&serde_json::to_string(&settings).unwrap()), settings);
+        let mut mih = settings.made_in_heaven;
+        mih.max_multiplier = f32::NAN;
+        mih.ramp_up_secs = f32::INFINITY;
+        mih.deceleration_secs = -1.0;
+        mih.reset_secs = 900.0;
+        mih.duration_secs = 0.0;
+        mih.volume = 200;
+        mih.intensity = 200;
+        mih.sanitize();
+        assert_eq!(mih.max_multiplier, 4.0);
+        assert_eq!(mih.ramp_up_secs, 20.0);
+        assert_eq!(mih.deceleration_secs, 0.2);
+        assert_eq!(mih.reset_secs, 5.0);
+        assert_eq!(mih.duration_secs, 1.0);
+        assert_eq!(mih.volume, 100);
+        assert_eq!(mih.intensity, 100);
     }
 }

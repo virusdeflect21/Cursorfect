@@ -121,8 +121,24 @@ impl Shockwaves {
             );
             // Chromatic aberration: red and blue copies drift apart as the ring grows.
             let spread = 0.018 * ease;
-            batch.ring(s.center, quad_r, mid + spread, 0.02, cfg.hot([1.0, 0.1, 0.3], 1.5), a * 0.6, 1.0);
-            batch.ring(s.center, quad_r, (mid - spread).max(0.01), 0.02, cfg.hot([0.15, 0.5, 1.0], 1.5), a * 0.6, 1.0);
+            batch.ring(
+                s.center,
+                quad_r,
+                mid + spread,
+                0.02,
+                cfg.hot([1.0, 0.1, 0.3], 1.5),
+                a * 0.6,
+                1.0,
+            );
+            batch.ring(
+                s.center,
+                quad_r,
+                (mid - spread).max(0.01),
+                0.02,
+                cfg.hot([0.15, 0.5, 1.0], 1.5),
+                a * 0.6,
+                1.0,
+            );
         }
     }
 }
