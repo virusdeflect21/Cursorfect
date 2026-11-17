@@ -113,7 +113,7 @@ component EffectChip inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "CursorFect";
+    title: "CursorFects";
     preferred-width: 500px;
     preferred-height: 720px;
     min-width: 400px;
@@ -161,8 +161,8 @@ export component MainWindow inherits Window {
     in-out property <bool> fx-ripples: true;
     in-out property <bool> fx-glitch: true;
     in-out property <bool> fx-bursts: true;
-    property <color> accent: root.effect == 1 ? root.gold : root.primary-color;
-    property <color> accent2: root.effect == 1 ? root.violet : root.secondary-color;
+    property <color> accent: root.effect == 1 ? (root.tw-dub == 4 ? #F4F9FF : root.tw-dub == 1 || root.tw-dub == 2 ? #398EFF : root.tw-dub == 3 ? #FFA323 : root.gold) : root.primary-color;
+    property <color> accent2: root.effect == 1 ? (root.tw-dub == 4 ? #9FB7DE : root.tw-dub == 1 || root.tw-dub == 2 ? #243DAD : root.tw-dub == 3 ? #B9580C : root.violet) : root.secondary-color;
     in-out property <bool> fx-ghosts: true;
     in-out property <bool> fx-trails: true;
     in-out property <bool> fx-glow: true;
@@ -217,7 +217,7 @@ export component MainWindow inherits Window {
                 height: 78px;
                 border-radius: 10px;
                 background: root.effect == 1
-                    ? @linear-gradient(120deg, #101014 0%, #1B1B23 55%, #2A2140 100%)
+                    ? @linear-gradient(120deg, #101014 0%, root.accent2.with-alpha(0.28) 55%, root.accent.with-alpha(0.30) 100%)
                     : @linear-gradient(120deg, #0B0F17 0%, #10202B 55%, #0E2A24 100%);
                 // Accent line in the current preset colours.
                 Rectangle {
@@ -244,7 +244,7 @@ export component MainWindow inherits Window {
                                 color: #FFFFFF;
                             }
                             Text {
-                                text: "Fect";
+                                text: "Fects";
                                 font-size: 24px;
                                 font-weight: 800;
                                 color: root.accent;
@@ -312,7 +312,7 @@ export component MainWindow inherits Window {
                         title: "The World";
                         subtitle: "Stop time, move windows";
                         selected: root.effect == 1;
-                        accent: root.gold;
+                        accent: root.accent;
                         clicked => {
                             root.effect = 1;
                             root.changed();
@@ -1005,3 +1005,4 @@ export component MainWindow inherits Window {
         }
     }
 }
+

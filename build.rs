@@ -45,10 +45,10 @@ fn main() {
         let mut res = winresource::WindowsResource::new();
         res.set_icon(ico_path.to_str().expect("utf-8 path"));
         res.set_manifest(MANIFEST);
-        res.set("ProductName", "CursorFect");
+        res.set("ProductName", "CursorFects");
         res.set(
             "FileDescription",
-            "CursorFect - cursor effects",
+            "CursorFects - cursor effects",
         );
         res.set("LegalCopyright", "MIT License");
         if let Err(e) = res.compile() {
@@ -58,3 +58,4 @@ fn main() {
         }
     }
 }
+

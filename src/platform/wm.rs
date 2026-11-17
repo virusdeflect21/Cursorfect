@@ -1,5 +1,6 @@
 //! Real desktop windows for The World: which ones can be grabbed during a time stop, and
 //! moving them (all at once) when time resumes.
+//! Dropped windows are raised in drop order to match the frozen preview.
 //!
 //! # HWND ownership
 //! The HWNDs belong to other processes. They are only stored as plain integers, re-validated
@@ -10,9 +11,10 @@
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowPlacement, ShowWindowAsync, SW_RESTORE, WINDOWPLACEMENT,
     EnumWindows, GWL_EXSTYLE, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-    IsZoomed, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+    IsZoomed, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, HWND_TOP,
     SetWindowPos, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::BOOL;
@@ -85,22 +87,17 @@ pub struct WindowFacts {
 }
 
 /// Shell surfaces that must never be dragged.
-const SHELL_CLASSES: [&str; 6] = [
+const SHELL_CLASSES: [&str; 5] = [
     "Progman",
     "WorkerW",
     "Shell_TrayWnd",
     "Shell_SecondaryTrayWnd",
-    "Windows.UI.Core.CoreWindow",
     "XamlExplorerHostIslandWindow",
 ];
 
 /// Ordinary, visible, movable application windows only.
 pub fn eligible(f: &WindowFacts) -> bool {
     if !f.visible || f.minimized || f.cloaked || f.own_process {
-        return false;
-    }
-    // Maximized windows fill the screen: moving one would just un-maximize it oddly.
-    if f.maximized {
         return false;
     }
     if f.tool_window && !f.app_window {
@@ -188,7 +185,7 @@ pub fn top_level_windows() -> Vec<WinInfo> {
     ctx.out
 }
 
-/// Move windows by (dx, dy) pixels each, keeping size and Z-order. Returns how many moved.
+/// Move windows by (dx, dy) pixels each, restoring maximized windows and raising dropped windows to match the preview. Returns how many moved.
 /// Invalid (closed) or protected windows are skipped.
 pub fn apply_moves(moves: &[(isize, f32, f32)]) -> usize {
     let mut done = 0;
@@ -210,14 +207,34 @@ pub fn apply_moves(moves: &[(isize, f32, f32)]) -> usize {
             }
             let x = r.left + dx.round() as i32;
             let y = r.top + dy.round() as i32;
+            let mut flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS;
+            let (mut width, mut height) = (0, 0);
+            if IsZoomed(hwnd).as_bool() {
+                let mut placement = WINDOWPLACEMENT {
+                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    ..Default::default()
+                };
+                if GetWindowPlacement(hwnd, &mut placement).is_err() {
+                    continue;
+                }
+                width = placement.rcNormalPosition.right - placement.rcNormalPosition.left;
+                height = placement.rcNormalPosition.bottom - placement.rcNormalPosition.top;
+                // Queue restoration before positioning on the owning thread. A maximized
+                // window otherwise ignores the requested desktop position.
+                if !ShowWindowAsync(hwnd, SW_RESTORE).as_bool() {
+                    continue;
+                }
+            } else {
+                flags |= SWP_NOSIZE;
+            }
             match SetWindowPos(
                 hwnd,
-                None,
+                Some(HWND_TOP),
                 x,
                 y,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+                width,
+                height,
+                flags,
             ) {
                 Ok(()) => done += 1,
                 Err(e) => tracing::warn!("could not move window {raw:#x}: {e}"),
@@ -266,10 +283,6 @@ mod tests {
                 own_process: true,
                 ..normal()
             },
-            WindowFacts {
-                maximized: true,
-                ..normal()
-            },
         ] {
             assert!(!eligible(&f), "{f:?}");
         }
@@ -306,6 +319,12 @@ mod tests {
     }
 
     #[test]
+    fn maximized_and_uwp_apps_are_grabbable() {
+        assert!(eligible(&WindowFacts { maximized: true, ..normal() }));
+        assert!(eligible(&WindowFacts { class: "Windows.UI.Core.CoreWindow".into(), ..normal() }));
+    }
+
+    #[test]
     fn rect_math() {
         let r = WinRect {
             l: -100.0,
@@ -319,3 +338,4 @@ mod tests {
         assert_eq!((o.l, o.t, o.w(), o.h()), (-50.0, 0.0, 200.0, 100.0));
     }
 }
+

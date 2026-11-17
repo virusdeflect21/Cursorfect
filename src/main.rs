@@ -97,15 +97,10 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| std::env::temp_dir().join("cursorfect-render-test"));
         return app::render_test(&dir);
     }
-    let Some(_instance) = native::SingleInstance::acquire_or_replace() else {
+    let Some(_instance) = native::SingleInstance::acquire_or_show() else {
         tracing::info!("another CursorFect instance did not quit; exiting");
         return Ok(());
     };
-    native::listen_for_quit(|| {
-        let _ = slint::invoke_from_event_loop(|| {
-            let _ = slint::quit_event_loop();
-        });
-    });
     let _timer = native::TimerResolution::new();
     native::restore_system_cursors();
     tracing::info!("CursorFect {} starting", env!("CARGO_PKG_VERSION"));
@@ -261,10 +256,10 @@ fn main() -> anyhow::Result<()> {
             let _ = std::process::Command::new("explorer").arg(d).spawn();
         }
     });
-    // Closing the window keeps the app running in the tray.
-    // Closing the window quits (shutting effects down cleanly); "Hide to tray" keeps it running.
     ui.window().on_close_requested(|| {
-        let _ = slint::quit_event_loop();
+        if !TRAY.with(|t| t.borrow().is_some()) {
+            let _ = slint::quit_event_loop();
+        }
         slint::CloseRequestResponse::HideWindow
     });
 
@@ -299,6 +294,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let weak = ui.as_weak();
+    native::listen_for_show(move || {
+        let weak = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() { show_window(&ui); }
+        });
+    });
     let tray_ok = TRAY.with(|t| t.borrow().is_some());
     if start_minimized && tray_ok {
         tracing::info!("starting minimized to tray");
@@ -319,3 +321,4 @@ fn main() -> anyhow::Result<()> {
     drop(ui);
     Ok(())
 }
+

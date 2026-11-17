@@ -892,6 +892,7 @@ impl Engine {
         let t = &self.settings.the_world;
         let reduced = self.settings.performance.performance_mode;
         TwOptions {
+            dub: t.dub,
             mode: t.mode,
             duration: f32::from(t.duration_secs),
             max_secs: t.max_secs as f32,
@@ -979,6 +980,9 @@ impl Engine {
         if !plan.clips.is_empty() {
             self.audio.send(AudioCmd::TwPlay(plan.clips.clone()));
         }
+        if let Some(p) = native::cursor_pos() {
+            self.tw.drag_to(p, now);
+        }
         self.tw.request_resume(now, plan.moment);
         let hwnd = self.overlay.as_ref().map(|o| o.hwnd_raw()).unwrap_or(0);
         self.watchdog.arm(
@@ -1053,6 +1057,10 @@ impl Engine {
 
     /// Time starts again: move the windows, show the live desktop, give input back.
     fn tw_unfreeze(&mut self, now: Instant, apply: bool) {
+        if apply {
+            if let Some(p) = native::cursor_pos() { self.tw.drag_to(p, now); }
+            self.tw.release();
+        }
         let moves = self.tw.pending_moves();
         // Input first: never keep the desktop blocked longer than necessary.
         self.hooks.time_stopped.store(false, Ordering::Release);
@@ -1667,6 +1675,8 @@ pub fn demo_shots(
                     tint: 1.0,
                     chroma: 0.0,
                     pinch: 0.0,
+                    primary: crate::effects::the_world::palette(crate::audio::dubs::Dub::DioJp).0,
+                    secondary: crate::effects::the_world::palette(crate::audio::dubs::Dub::DioJp).1,
                 },
             )
         });
@@ -1678,3 +1688,4 @@ pub fn demo_shots(
     tracing::info!("demo shots saved to {} (moved window shown: {swapped})", dir.display());
     Ok(())
 }
+
