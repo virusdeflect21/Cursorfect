@@ -45,6 +45,13 @@ fn main() {
         let mut res = winresource::WindowsResource::new();
         res.set_icon(ico_path.to_str().expect("utf-8 path"));
         res.set_manifest(MANIFEST);
+        // Public release name is v1.1.0.1. Cargo requires SemVer, so the package
+        // uses 1.1.0+1 while Windows receives the requested four-part version.
+        const RELEASE_VERSION: u64 = (1u64 << 48) | (1u64 << 32) | 1;
+        res.set_version_info(winresource::VersionInfo::FILEVERSION, RELEASE_VERSION);
+        res.set_version_info(winresource::VersionInfo::PRODUCTVERSION, RELEASE_VERSION);
+        res.set("FileVersion", "1.1.0.1");
+        res.set("ProductVersion", "1.1.0.1");
         res.set("ProductName", "CursorFects");
         res.set(
             "FileDescription",

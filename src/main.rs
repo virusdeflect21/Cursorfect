@@ -103,7 +103,8 @@ fn main() -> anyhow::Result<()> {
     };
     let _timer = native::TimerResolution::new();
     native::restore_system_cursors();
-    tracing::info!("CursorFect {} starting", env!("CARGO_PKG_VERSION"));
+    let display_version = env!("CARGO_PKG_VERSION").replace('+', ".");
+    tracing::info!("CursorFect {display_version} starting");
 
     let settings = config::load();
     let start_minimized =
@@ -128,7 +129,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let ui = MainWindow::new().context("creating settings window")?;
-    ui.set_version(env!("CARGO_PKG_VERSION").into());
+    ui.set_version(display_version.into());
     ui.set_fps_auto_text(format!("Auto ({} Hz monitor)", native::max_refresh_rate()).into());
     ui::apply_settings(&ui, &settings);
     ui::apply_status(&ui, state::SysState::Offline, 100.0, RECORD_NONE);

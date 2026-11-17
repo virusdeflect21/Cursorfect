@@ -53,7 +53,8 @@ component ShortcutRow inherits HorizontalLayout {
             x: 10px;
             width: parent.width - 20px;
             text: root.recording ? "Press a key, middle click or side button\u{2026} (Esc cancels)" : root.shortcut;
-            font-weight: 600;
+            font-weight: 500;
+            letter-spacing: 0.1px;
             vertical-alignment: center;
             height: parent.height;
             overflow: elide;
@@ -100,13 +101,15 @@ component EffectChip inherits Rectangle {
         spacing: 1px;
         Text {
             text: root.title;
-            font-weight: 700;
+            font-weight: 600;
             font-size: 14px;
+            letter-spacing: 0.15px;
         }
         Text {
             text: root.subtitle;
-            opacity: 0.6;
+            opacity: 0.68;
             font-size: 11px;
+            letter-spacing: 0.1px;
             overflow: elide;
         }
     }
@@ -119,6 +122,11 @@ export component MainWindow inherits Window {
     min-width: 400px;
     min-height: 460px;
     background: Palette.background;
+    // Bahnschrift is bundled with supported Windows versions. Its DIN-style,
+    // straighter letterforms avoid the soft/curvy generic fallback look.
+    default-font-family: "Bahnschrift";
+    default-font-size: 13px;
+    default-font-weight: 400;
 
     in property <string> status-text: "OFFLINE";
     in property <color> status-color: #8B949C;
@@ -244,14 +252,16 @@ export component MainWindow inherits Window {
                             alignment: start;
                             Text {
                                 text: "Cursor";
-                                font-size: 24px;
-                                font-weight: 800;
+                                font-size: 23px;
+                                font-weight: 700;
+                                letter-spacing: 0.2px;
                                 color: #FFFFFF;
                             }
                             Text {
                                 text: "Fects";
-                                font-size: 24px;
-                                font-weight: 800;
+                                font-size: 23px;
+                                font-weight: 700;
+                                letter-spacing: 0.2px;
                                 color: root.accent;
                             }
                         }
@@ -268,7 +278,9 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.status-text + "  \u{b7}  cursor effects";
                                 color: #C9D1D9;
-                                font-size: 12px;
+                                font-size: 11px;
+                                font-weight: 500;
+                                letter-spacing: 0.35px;
                             }
                         }
                     }
@@ -300,7 +312,7 @@ export component MainWindow inherits Window {
 
             // ---- Effect picker (more effects will appear here)
             GroupBox {
-                title: "✦ Effect";
+                title: "EFFECT";
                 HorizontalLayout {
                     spacing: 8px;
                     EffectChip {
@@ -327,7 +339,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "Activation";
+                title: "ACTIVATION";
                 VerticalLayout {
                     spacing: 8px;
                     ShortcutRow {
@@ -380,7 +392,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "♫ Sound";
+                title: "SOUND";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
@@ -602,7 +614,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 1: GroupBox {
-                title: "◷ Time stop";
+                title: "TIME STOP";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -755,7 +767,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 0: GroupBox {
-                title: "✦ Look";
+                title: "LOOK";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -928,7 +940,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 0: GroupBox {
-                title: "Warp dash";
+                title: "WARP DASH";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
@@ -970,7 +982,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "⚙ System";
+                title: "SYSTEM";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
