@@ -97,13 +97,16 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| std::env::temp_dir().join("cursorfect-render-test"));
         return app::render_test(&dir);
     }
-    let Some(_instance) = native::SingleInstance::acquire_or_show() else {
-        tracing::info!("another CursorFect instance did not quit; exiting");
+    let display_version = env!("CARGO_PKG_VERSION").replace('+', ".");
+    let running_file = config::running_version_path();
+    let Some(_instance) =
+        native::SingleInstance::acquire_or_show(&display_version, running_file.as_deref())
+    else {
+        tracing::info!("another CursorFect instance is running; exiting");
         return Ok(());
     };
     let _timer = native::TimerResolution::new();
     native::restore_system_cursors();
-    let display_version = env!("CARGO_PKG_VERSION").replace('+', ".");
     tracing::info!("CursorFect {display_version} starting");
 
     let settings = config::load();

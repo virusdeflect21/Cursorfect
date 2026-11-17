@@ -457,6 +457,11 @@ pub fn settings_path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|d| d.config_dir().join(APP_DIR).join("settings.json"))
 }
 
+/// File where the running instance publishes its version, so a second launch can
+/// tell the user when an older copy is still open.
+pub fn running_version_path() -> Option<PathBuf> {
+    settings_path().map(|p| p.with_file_name("running-version.txt"))
+}
 
 /// Parse settings JSON. Invalid JSON yields defaults; a field with an invalid type or
 /// out-of-type value is dropped individually (that field falls back to its default)

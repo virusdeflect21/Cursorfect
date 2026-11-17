@@ -85,7 +85,7 @@ Everything can be switched on and off separately:
 | Cancel the current drag / undo the last move | **Esc** / **Backspace** |
 | Emergency off (always works) | **Ctrl + Alt + Shift + F12** |
 
-Starting `cursorfect.exe` while it's already running replaces the running copy. Closing the window quits; *Hide to tray* keeps it running.
+Starting `cursorfect.exe` while the same version is already running just brings its settings window back. If the running copy is an older version, a notice asks you to exit it from the tray before starting the new one. *Hide to tray* keeps it running in the background.
 
 ## Safety & privacy
 

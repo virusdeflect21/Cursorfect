@@ -26,9 +26,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, SM_CXCURSOR, SetCursorPos,
+    GetCursorPos, GetSystemMetrics, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST,
+    MessageBoxW, SM_CXCURSOR, SetCursorPos,
 };
-use windows::core::{BOOL, PCWSTR, w};
+use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
 use crate::input::cursor::Rect;
 
@@ -369,20 +370,90 @@ impl SingleInstance {
 const QUIT_EVENT: PCWSTR = w!("Local\\CursorFect.Quit");
 
 impl SingleInstance {
-    pub fn acquire_or_show() -> Option<Self> {
-        if let Some(me) = Self::acquire() { return Some(me); }
-        // The existing instance may still be starting; retry until its listener exists.
-        for _ in 0..30 {
-            unsafe {
-                if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, QUIT_EVENT) {
-                    let _ = SetEvent(ev);
-                    let _ = CloseHandle(ev);
-                    return None;
+    /// Take the instance lock, or hand control to the copy that already holds it.
+    ///
+    /// A second launch of the *same* version simply raises the existing settings
+    /// window. A launch of a *different* (usually older) version explains the
+    /// situation instead of silently opening the old window, which used to make a
+    /// freshly installed build look like nothing had changed.
+    pub fn acquire_or_show(version: &str, version_file: Option<&std::path::Path>) -> Option<Self> {
+        if let Some(me) = Self::acquire() {
+            if let Some(path) = version_file {
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
                 }
+                let _ = std::fs::write(path, version);
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            return Some(me);
         }
+        // A starting instance publishes its version right after taking the mutex,
+        // so wait briefly before deciding which copy is running.
+        let mut running = version_file.and_then(read_running_version);
+        for _ in 0..20 {
+            if running.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            running = version_file.and_then(read_running_version);
+        }
+        if running.as_deref() == Some(version) {
+            raise_existing_window();
+            return None;
+        }
+        match running.as_deref() {
+            Some(old) => tracing::warn!("CursorFects {old} is already running (this is {version})"),
+            None => tracing::warn!("another CursorFects instance is already running"),
+        }
+        show_already_running(version, running.as_deref());
         None
+    }
+}
+
+fn read_running_version(path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+fn raise_existing_window() {
+    // The existing instance may still be starting; retry until its listener exists.
+    for _ in 0..30 {
+        unsafe {
+            if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, QUIT_EVENT) {
+                let _ = SetEvent(ev);
+                let _ = CloseHandle(ev);
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+fn show_already_running(version: &str, running: Option<&str>) {
+    let body = match running {
+        Some(old) if old != version => format!(
+            "CursorFects {old} is still running.\n\n\
+             Close the old copy from its tray icon (right-click, then Exit), \
+             then start CursorFects {version} again."
+        ),
+        _ => format!(
+            "CursorFects is already running.\n\n\
+             If you just downloaded CursorFects {version}, the window you are seeing \
+             belongs to an older copy. Close it from its tray icon (right-click, then \
+             Exit), then start this version again."
+        ),
+    };
+    let body = HSTRING::from(body);
+    let caption = HSTRING::from(format!("CursorFects {version}"));
+    // SAFETY: both strings outlive the blocking call.
+    unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(body.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST,
+        );
     }
 }
 
