@@ -1,0 +1,10 @@
+/target
+
+# Sound files are NOT distributed (they are copyrighted). Users add their own.
+*.mp3
+*.wav
+*.ogg
+*.flac
+
+# Local scratch
+*.bmp

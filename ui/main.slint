@@ -1,0 +1,1007 @@
+// CursorFect settings: Windows 11 (Fluent) controls, follows the system light/dark theme.
+import { Button, ComboBox, GroupBox, LineEdit, Palette, ProgressIndicator, ScrollView, Slider, Switch } from "std-widgets.slint";
+
+component SliderRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> suffix: "%";
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in-out property <float> value;
+    callback edited();
+    spacing: 2px;
+    HorizontalLayout {
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+        }
+        Rectangle { }
+        Text {
+            text: "\{Math.round(root.value)}\{root.suffix}";
+            opacity: 0.65;
+            vertical-alignment: center;
+        }
+    }
+    Slider {
+        minimum: root.minimum;
+        maximum: root.maximum;
+        value <=> root.value;
+        changed(v) => {
+            root.edited();
+        }
+    }
+}
+
+component ShortcutRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> shortcut;
+    in property <bool> recording;
+    callback record();
+    spacing: 8px;
+    Text {
+        text: root.label;
+        width: 80px;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+        height: 30px;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: root.recording ? #00D9FF : Palette.border;
+        background: root.recording ? #00D9FF22 : Palette.alternate-background;
+        Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: root.recording ? "Press a key, middle click or side button\u{2026} (Esc cancels)" : root.shortcut;
+            font-weight: 600;
+            vertical-alignment: center;
+            height: parent.height;
+            overflow: elide;
+        }
+    }
+    Button {
+        text: root.recording ? "Cancel" : "Change\u{2026}";
+        clicked => {
+            root.record();
+        }
+    }
+}
+
+component OptSwitch inherits Switch {
+    callback edited();
+    toggled => {
+        root.edited();
+    }
+}
+
+component EffectChip inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    in property <color> accent: #00D9FF;
+    callback clicked();
+    height: 54px;
+    border-radius: 8px;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? root.accent : Palette.border;
+    background: root.selected ? @linear-gradient(135deg, root.accent.with-alpha(0.22) 0%, root.accent.with-alpha(0.04) 100%) : Palette.alternate-background;
+    opacity: root.enabled ? 1.0 : 0.5;
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        spacing: 1px;
+        Text {
+            text: root.title;
+            font-weight: 700;
+            font-size: 14px;
+        }
+        Text {
+            text: root.subtitle;
+            opacity: 0.6;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "CursorFect";
+    preferred-width: 500px;
+    preferred-height: 720px;
+    min-width: 400px;
+    min-height: 460px;
+    background: Palette.background;
+
+    in property <string> status-text: "OFFLINE";
+    in property <color> status-color: #8B949C;
+    in property <string> version: "";
+
+    in-out property <bool> master-on: false;
+    in property <string> activation-text: "Middle Click";
+    in property <string> dash-text: "Ctrl + Middle Click";
+    in property <int> recording: 0;
+    in property <string> notice: "";
+    in-out property <bool> hold-mode: false;
+    in-out property <bool> consume-mouse: true;
+    in-out property <bool> keep-arrow: true;
+
+    in-out property <int> effect: 0;
+    in property <color> gold: #E9C46A;
+    in property <color> violet: #A78BFA;
+    in-out property <bool> sv-start: true;
+    in-out property <bool> sv-move: true;
+    in-out property <bool> sv-dash: true;
+    in-out property <bool> sv-end: true;
+    in-out property <int> tw-mode: 1;
+    in-out property <float> tw-duration: 5;
+    in-out property <int> tw-dub: 0;
+    in-out property <bool> tw-voice: true;
+    in-out property <bool> tw-sfx: true;
+    in-out property <bool> tw-ticks: true;
+    in-out property <bool> tw-rvoice: true;
+    in-out property <bool> tw-rsfx: true;
+    in-out property <bool> tw-wait: true;
+    in-out property <bool> tw-flash: true;
+    in-out property <bool> tw-invert: true;
+    in-out property <bool> tw-tint: true;
+    in-out property <bool> tw-ripples: true;
+    in-out property <bool> tw-countdown: true;
+    in-out property <bool> tw-move: true;
+    in-out property <bool> tw-streaks: true;
+    in-out property <bool> tw-flare: true;
+    in-out property <bool> tw-rays: true;
+    in-out property <bool> fx-ripples: true;
+    in-out property <bool> fx-glitch: true;
+    in-out property <bool> fx-bursts: true;
+    property <color> accent: root.effect == 1 ? root.gold : root.primary-color;
+    property <color> accent2: root.effect == 1 ? root.violet : root.secondary-color;
+    in-out property <bool> fx-ghosts: true;
+    in-out property <bool> fx-trails: true;
+    in-out property <bool> fx-glow: true;
+    in-out property <bool> fx-particles: true;
+    in-out property <bool> fx-shock: true;
+    in-out property <bool> fx-dash: true;
+    in-out property <bool> fx-dim: true;
+    in-out property <bool> fx-bloom: true;
+    in-out property <bool> fx-film: true;
+    in-out property <bool> fx-rays: true;
+    in-out property <float> intensity: 80;
+    in-out property <float> ghost-count: 14;
+    in-out property <float> ghost-opacity: 65;
+    in-out property <float> dash-distance: 350;
+    in-out property <float> dash-cooldown: 1000;
+
+    in-out property <bool> sfx-on: true;
+    in-out property <float> volume: 70;
+    in-out property <float> move-volume: 70;
+    in-out property <int> sound-mode: 0;
+    in property <string> sounds-dir: "";
+    in property <string> parts-text: "";
+
+    in-out property <int> preset: 0;
+    in-out property <string> custom-primary: "#B24CFF";
+    in-out property <string> custom-secondary: "#FF5CE1";
+    in property <color> primary-color: #68F5B0;
+    in property <color> secondary-color: #00D9FF;
+
+    in-out property <bool> energy-on: false;
+    in property <float> energy-pct: 100;
+    in-out property <bool> perf-mode: false;
+    in-out property <int> fps-index: 0;
+    in property <string> fps-auto-text: "Auto (match monitor)";
+    in-out property <bool> startup-on: false;
+
+    callback changed();
+    callback record(int);
+    callback preview(int);
+    callback tw-preview(int);
+    callback reset-defaults();
+    callback minimize-tray();
+    callback open-sounds();
+
+    ScrollView {
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            // ---- Header: name, status, master switch
+            Rectangle {
+                height: 78px;
+                border-radius: 10px;
+                background: root.effect == 1
+                    ? @linear-gradient(120deg, #101014 0%, #1B1B23 55%, #2A2140 100%)
+                    : @linear-gradient(120deg, #0B0F17 0%, #10202B 55%, #0E2A24 100%);
+                // Accent line in the current preset colours.
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 3px;
+                    width: parent.width;
+                    height: 3px;
+                    background: @linear-gradient(90deg, root.accent 0%, root.accent2 100%);
+                }
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            spacing: 0px;
+                            alignment: start;
+                            Text {
+                                text: "Cursor";
+                                font-size: 24px;
+                                font-weight: 800;
+                                color: #FFFFFF;
+                            }
+                            Text {
+                                text: "Fect";
+                                font-size: 24px;
+                                font-weight: 800;
+                                color: root.accent;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 4px;
+                                background: root.status-color;
+                            }
+                            Text {
+                                text: root.status-text + "  \u{b7}  cursor effects";
+                                color: #C9D1D9;
+                                font-size: 12px;
+                            }
+                        }
+                    }
+                    Rectangle { }
+                    Switch {
+                        text: root.master-on ? "On" : "Off";
+                        checked <=> root.master-on;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                }
+            }
+
+            if root.notice != "": Rectangle {
+                border-radius: 6px;
+                background: #D97A2B22;
+                border-width: 1px;
+                border-color: #D97A2B88;
+                HorizontalLayout {
+                    padding: 8px;
+                    Text {
+                        text: root.notice;
+                        wrap: word-wrap;
+                        color: #E89A55;
+                    }
+                }
+            }
+
+            // ---- Effect picker (more effects will appear here)
+            GroupBox {
+                title: "Effect";
+                HorizontalLayout {
+                    spacing: 8px;
+                    EffectChip {
+                        title: "Sandevistan";
+                        subtitle: "Time-slow afterimages";
+                        selected: root.effect == 0;
+                        accent: root.primary-color;
+                        clicked => {
+                            root.effect = 0;
+                            root.changed();
+                        }
+                    }
+                    EffectChip {
+                        title: "The World";
+                        subtitle: "Stop time, move windows";
+                        selected: root.effect == 1;
+                        accent: root.gold;
+                        clicked => {
+                            root.effect = 1;
+                            root.changed();
+                        }
+                    }
+                }
+            }
+
+            GroupBox {
+                title: "Activation";
+                VerticalLayout {
+                    spacing: 8px;
+                    ShortcutRow {
+                        label: "Shortcut";
+                        shortcut: root.activation-text;
+                        recording: root.recording == 1;
+                        record => {
+                            root.record(1);
+                        }
+                    }
+                    if root.effect == 0: HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Mode";
+                            width: 80px;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: ["Toggle (press to turn on/off)", "Hold (active while held)"];
+                            current-index: root.hold-mode ? 1 : 0;
+                            selected(v) => {
+                                root.hold-mode = self.current-index == 1;
+                                root.changed();
+                            }
+                        }
+                    }
+                    Switch {
+                        text: "Block the bound mouse button's normal action (autoscroll, back/forward)";
+                        checked <=> root.consume-mouse;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Keep arrow cursor while active";
+                        checked <=> root.keep-arrow;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Text {
+                        text: root.effect == 1
+                            ? "Middle click stops time with The World (the Sandevistan stays off). Emergency resume: Ctrl + Alt + Shift + F12"
+                            : "Middle click turns on the Sandevistan (The World stays off). Emergency off: Ctrl + Alt + Shift + F12";
+                        wrap: word-wrap;
+                        opacity: 0.6;
+                        font-size: 11px;
+                    }
+                }
+            }
+
+            GroupBox {
+                title: "Sound";
+                VerticalLayout {
+                    spacing: 8px;
+                    Switch {
+                        text: "Sound effects";
+                        checked <=> root.sfx-on;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    if root.effect == 0: HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Style";
+                            width: 80px;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: ["Split: start \u{b7} move \u{b7} dash \u{b7} end", "Full track (ends with the sound)"];
+                            current-index <=> root.sound-mode;
+                            selected(v) => {
+                                root.changed();
+                            }
+                        }
+                    }
+                    if root.effect == 0: Text {
+                        text: root.sound-mode == 0
+                            ? "Turning on plays the opening hit, moving plays a loop that swells with your speed, every dash cracks, and turning off plays the power-down."
+                            : "The whole sound plays once; the Sandevistan turns off by itself when it ends.";
+                        wrap: word-wrap;
+                        opacity: 0.6;
+                        font-size: 11px;
+                    }
+                    SliderRow {
+                        label: "Volume";
+                        value <=> root.volume;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    if root.effect == 0 && root.sound-mode == 0: SliderRow {
+                        label: "Movement sound";
+                        value <=> root.move-volume;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    if root.effect == 0 && root.sound-mode == 0: HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "Play";
+                            vertical-alignment: center;
+                            width: 56px;
+                        }
+                        OptSwitch {
+                            text: "Start";
+                            checked <=> root.sv-start;
+                            edited => {
+                                root.changed();
+                            }
+                        }
+                        OptSwitch {
+                            text: "Move";
+                            checked <=> root.sv-move;
+                            edited => {
+                                root.changed();
+                            }
+                        }
+                        OptSwitch {
+                            text: "Dash";
+                            checked <=> root.sv-dash;
+                            edited => {
+                                root.changed();
+                            }
+                        }
+                        OptSwitch {
+                            text: "End";
+                            checked <=> root.sv-end;
+                            edited => {
+                                root.changed();
+                            }
+                        }
+                    }
+                    if root.effect == 0: HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Preview";
+                            vertical-alignment: center;
+                            width: 56px;
+                        }
+                        Button {
+                            text: "Start";
+                            clicked => {
+                                root.preview(0);
+                            }
+                        }
+                        Button {
+                            text: "Move";
+                            clicked => {
+                                root.preview(1);
+                            }
+                        }
+                        Button {
+                            text: "Dash";
+                            clicked => {
+                                root.preview(2);
+                            }
+                        }
+                        Button {
+                            text: "End";
+                            clicked => {
+                                root.preview(3);
+                            }
+                        }
+                        Button {
+                            text: "Full";
+                            clicked => {
+                                root.preview(4);
+                            }
+                        }
+                    }
+                    if root.effect == 1: HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Dub";
+                            width: 80px;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)"];
+                            current-index <=> root.tw-dub;
+                            selected(v) => {
+                                root.changed();
+                            }
+                        }
+                    }
+                    if root.effect == 1: GridLayout {
+                        spacing: 6px;
+                        Row {
+                            OptSwitch {
+                                text: "\"ZA WARUDO!\" voice";
+                                checked <=> root.tw-voice;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "Time-stop SFX";
+                                checked <=> root.tw-sfx;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Resume voice";
+                                checked <=> root.tw-rvoice;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "Resume SFX";
+                                checked <=> root.tw-rsfx;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Clock tick every second";
+                                checked <=> root.tw-ticks;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                    }
+                    if root.effect == 1: HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Preview";
+                            vertical-alignment: center;
+                            width: 56px;
+                        }
+                        Button {
+                            text: "Time stop";
+                            clicked => {
+                                root.tw-preview(0);
+                            }
+                        }
+                        Button {
+                            text: "Resume";
+                            clicked => {
+                                root.tw-preview(1);
+                            }
+                        }
+                        Button {
+                            text: "Tick";
+                            clicked => {
+                                root.tw-preview(2);
+                            }
+                        }
+                    }
+                    if root.effect == 0 && root.parts-text != "": Text {
+                        text: root.parts-text;
+                        wrap: word-wrap;
+                        opacity: 0.6;
+                        font-size: 11px;
+                    }
+                    Button {
+                        text: "Open sounds folder";
+                        clicked => {
+                            root.open-sounds();
+                        }
+                    }
+                }
+            }
+
+            if root.effect == 1: GroupBox {
+                title: "Time stop";
+                VerticalLayout {
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Mode";
+                            width: 80px;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: ["Hold (stopped while held)", "Toggle (press again to resume, no limit)", "Timed (resumes by itself)"];
+                            current-index <=> root.tw-mode;
+                            selected(v) => {
+                                root.changed();
+                            }
+                        }
+                    }
+                    if root.tw-mode == 2: SliderRow {
+                        label: "Duration";
+                        suffix: " s";
+                        minimum: 1;
+                        maximum: 9;
+                        value <=> root.tw-duration;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    OptSwitch {
+                        text: "Time stops after the voice line (like the show)";
+                        checked <=> root.tw-wait;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    OptSwitch {
+                        text: "Move windows while time is stopped";
+                        checked <=> root.tw-move;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    if root.tw-move: Text {
+                        text: "Drag windows in the frozen world; they jump to their new place when time resumes. Esc cancels a drag, Backspace undoes the last move.";
+                        wrap: word-wrap;
+                        opacity: 0.6;
+                        font-size: 11px;
+                    }
+                    GridLayout {
+                        spacing: 6px;
+                        Row {
+                            OptSwitch {
+                                text: "Golden flash";
+                                checked <=> root.tw-flash;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "Colour inversion";
+                                checked <=> root.tw-invert;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Gold / violet tint";
+                                checked <=> root.tw-tint;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "Air ripples";
+                                checked <=> root.tw-ripples;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Energy streaks";
+                                checked <=> root.tw-streaks;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "Lens pinch & flare";
+                                checked <=> root.tw-flare;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Light rays";
+                                checked <=> root.tw-rays;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Second counter";
+                                checked <=> root.tw-countdown;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "HDR bloom";
+                                checked <=> root.fx-bloom;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.effect == 0: GroupBox {
+                title: "Look";
+                VerticalLayout {
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Preset";
+                            width: 80px;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: ["David \u{2014} Neon", "Smasher \u{2014} Red", "Ghost \u{2014} Blue", "Custom"];
+                            current-index <=> root.preset;
+                            selected(v) => {
+                                root.changed();
+                            }
+                        }
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
+                            background: root.primary-color;
+                        }
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
+                            background: root.secondary-color;
+                        }
+                    }
+                    if root.preset == 3: HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            text <=> root.custom-primary;
+                            placeholder-text: "#RRGGBB";
+                            edited(t) => {
+                                root.changed();
+                            }
+                        }
+                        LineEdit {
+                            text <=> root.custom-secondary;
+                            placeholder-text: "#RRGGBB";
+                            edited(t) => {
+                                root.changed();
+                            }
+                        }
+                    }
+                    Switch {
+                        text: "HDR bloom (glowing, white-hot cores)";
+                        checked <=> root.fx-bloom;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Cinematic grade (film grain, lens warp, colour fringing)";
+                        checked <=> root.fx-film;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Afterimages";
+                        checked <=> root.fx-ghosts;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Black & white world";
+                        checked <=> root.fx-dim;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Cursor glow";
+                        checked <=> root.fx-glow;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Sparks";
+                        checked <=> root.fx-particles;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Light rays";
+                        checked <=> root.fx-rays;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    GridLayout {
+                        spacing: 6px;
+                        Row {
+                            OptSwitch {
+                                text: "Air ripples";
+                                checked <=> root.fx-ripples;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                            OptSwitch {
+                                text: "Digital glitch";
+                                checked <=> root.fx-glitch;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                        Row {
+                            OptSwitch {
+                                text: "Speed bursts";
+                                checked <=> root.fx-bursts;
+                                edited => {
+                                    root.changed();
+                                }
+                            }
+                        }
+                    }
+                    Switch {
+                        text: "Activation shockwave";
+                        checked <=> root.fx-shock;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Neon trail line";
+                        checked <=> root.fx-trails;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    SliderRow {
+                        label: "Intensity";
+                        value <=> root.intensity;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    SliderRow {
+                        label: "Afterimage length";
+                        suffix: "";
+                        minimum: 1;
+                        maximum: 20;
+                        value <=> root.ghost-count;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    SliderRow {
+                        label: "Afterimage opacity";
+                        value <=> root.ghost-opacity;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                }
+            }
+
+            if root.effect == 0: GroupBox {
+                title: "Warp dash";
+                VerticalLayout {
+                    spacing: 8px;
+                    Switch {
+                        text: "Enable warp dash";
+                        checked <=> root.fx-dash;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    ShortcutRow {
+                        label: "Shortcut";
+                        shortcut: root.dash-text;
+                        recording: root.recording == 2;
+                        record => {
+                            root.record(2);
+                        }
+                    }
+                    SliderRow {
+                        label: "Distance";
+                        suffix: " px";
+                        minimum: 100;
+                        maximum: 1000;
+                        value <=> root.dash-distance;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                    SliderRow {
+                        label: "Cooldown";
+                        suffix: " ms";
+                        minimum: 0;
+                        maximum: 5000;
+                        value <=> root.dash-cooldown;
+                        edited => {
+                            root.changed();
+                        }
+                    }
+                }
+            }
+
+            GroupBox {
+                title: "System";
+                VerticalLayout {
+                    spacing: 8px;
+                    Switch {
+                        text: "Energy limit (overheats after a while)";
+                        checked <=> root.energy-on;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    if root.energy-on: ProgressIndicator {
+                        progress: clamp(root.energy-pct / 100, 0, 1);
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Frame rate";
+                            width: 80px;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: [root.fps-auto-text, "60 fps", "120 fps", "144 fps", "165 fps", "240 fps"];
+                            current-index <=> root.fps-index;
+                            selected(v) => {
+                                root.changed();
+                            }
+                        }
+                    }
+                    Switch {
+                        text: "Performance mode (no bloom / grade, 60 fps max)";
+                        checked <=> root.perf-mode;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                    Switch {
+                        text: "Start with Windows";
+                        checked <=> root.startup-on;
+                        toggled => {
+                            root.changed();
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Reset to defaults";
+                    clicked => {
+                        root.reset-defaults();
+                    }
+                }
+                Rectangle { }
+                Text {
+                    text: "v\{root.version}";
+                    opacity: 0.5;
+                    vertical-alignment: center;
+                }
+                Button {
+                    text: "Hide to tray";
+                    primary: true;
+                    clicked => {
+                        root.minimize-tray();
+                    }
+                }
+            }
+        }
+    }
+}
