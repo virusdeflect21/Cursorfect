@@ -59,6 +59,8 @@ pub enum Look {
         chroma: f32,
         /// 0..1 lens pinch towards the centre (the instant before time stops).
         pinch: f32,
+        primary: Rgb,
+        secondary: Rgb,
     },
 }
 

@@ -36,6 +36,9 @@ pub struct TheWorldSettings {
     /// Timed mode length, 1..=9 seconds.
     pub duration_secs: u8,
     pub dub: Dub,
+    pub windups: [f32; 7],
+    pub custom_primary: String,
+    pub custom_secondary: String,
     /// "ZA WARUDO!" voice line.
     pub voice: bool,
     /// The time-stop sound effect.
@@ -72,6 +75,9 @@ impl Default for TheWorldSettings {
             mode: TimeStopMode::Toggle,
             duration_secs: 5,
             dub: Dub::DioJp,
+            windups: [-1.0; 7],
+            custom_primary: "#E95BFF".into(),
+            custom_secondary: "#6037C8".into(),
             voice: true,
             stop_sfx: true,
             ticks: true,
@@ -323,6 +329,7 @@ pub struct Settings {
     #[serde(default)]
     pub version: u32,
     pub master_enabled: bool,
+    pub mouse_boost: bool,
     /// Effect triggered by the activation shortcut.
     pub effect: EffectKind,
     pub the_world: TheWorldSettings,
@@ -355,6 +362,7 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             master_enabled: false,
+            mouse_boost: false,
             effect: EffectKind::Sandevistan,
             the_world: TheWorldSettings::default(),
             activation: Shortcut::default_activation(),
@@ -410,6 +418,7 @@ impl Settings {
         }
         self.performance.max_particles = self.performance.max_particles.clamp(0, 600);
         self.audio.move_volume = self.audio.move_volume.min(100);
+        for value in &mut self.the_world.windups { *value = finite_or(*value, -1.0).clamp(-1.0, 15.0); }
         self.the_world.duration_secs = self.the_world.duration_secs.clamp(1, 9);
         self.the_world.max_secs = self.the_world.max_secs.clamp(5, 3600);
         let e = &mut self.energy;

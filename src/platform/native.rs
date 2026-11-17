@@ -16,7 +16,7 @@ use windows::Win32::System::Registry::{
     RegSetValueExW,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent,
+    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, OpenEventW, SetEvent,
     WaitForSingleObject,
 };
 use windows::Win32::UI::HiDpi::{
@@ -369,70 +369,33 @@ impl SingleInstance {
 const QUIT_EVENT: PCWSTR = w!("Local\\CursorFect.Quit");
 
 impl SingleInstance {
-    /// Take over from an already running instance: ask it to quit (it saves its settings and
-    /// cleans up), then wait for it to go away. Starting the app again therefore always runs
-    /// the exe you just launched (e.g. a fresh build) instead of silently doing nothing.
-    pub fn acquire_or_replace() -> Option<Self> {
-        if let Some(me) = Self::acquire() {
-            return Some(me);
-        }
-        tracing::info!("another CursorFect instance is running; asking it to quit");
-        // SAFETY: named event opened with modify rights only; the handle is closed below.
-        unsafe {
-            if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, QUIT_EVENT) {
-                let _ = SetEvent(ev);
-                let _ = CloseHandle(ev);
-            }
-        }
-        for i in 0..60 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if let Some(me) = Self::acquire() {
-                return Some(me);
-            }
-            if i % 15 == 14 {
-                // SAFETY: as above.
-                unsafe {
-                    if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, QUIT_EVENT) {
-                        let _ = SetEvent(ev);
-                        let _ = CloseHandle(ev);
-                    }
+    pub fn acquire_or_show() -> Option<Self> {
+        if let Some(me) = Self::acquire() { return Some(me); }
+        // The existing instance may still be starting; retry until its listener exists.
+        for _ in 0..30 {
+            unsafe {
+                if let Ok(ev) = OpenEventW(EVENT_MODIFY_STATE, false, QUIT_EVENT) {
+                    let _ = SetEvent(ev);
+                    let _ = CloseHandle(ev);
+                    return None;
                 }
             }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
         None
     }
 }
 
-/// Runs `on_quit` (once) when another instance asks this one to quit.
-pub fn listen_for_quit(on_quit: impl FnOnce() + Send + 'static) {
-    // Auto-reset: each request is consumed by exactly one wait, so a stale signal can never
-    // make the next instance quit on start-up.
-    // SAFETY: the event handle is owned by the listener thread for the process lifetime.
-    let ev = unsafe { CreateEventW(None, false, false, QUIT_EVENT) };
-    let Ok(ev) = ev else {
-        tracing::warn!("quit event unavailable; a second launch cannot replace this one");
-        return;
-    };
+pub fn listen_for_show(on_show: impl Fn() + Send + 'static) {
+    let Ok(ev) = (unsafe { CreateEventW(None, false, false, QUIT_EVENT) }) else { return; };
     let raw = ev.0 as isize;
-    let _ = std::thread::Builder::new()
-        .name("cursorfect-quit".into())
-        .spawn(move || {
-            let ev = HANDLE(raw as *mut core::ffi::c_void);
-            // Ignore requests in the first second: the event loop may not be running yet.
-            let started = std::time::Instant::now();
-            loop {
-                // SAFETY: valid event handle created above, never closed while waiting.
-                unsafe {
-                    WaitForSingleObject(ev, INFINITE);
-                }
-                if started.elapsed() > std::time::Duration::from_millis(1000) {
-                    break;
-                }
-                tracing::info!("ignoring quit request during start-up");
-            }
-            tracing::info!("asked to quit by a newer instance");
-            on_quit();
-        });
+    let _ = std::thread::Builder::new().name("cursorfect-show".into()).spawn(move || {
+        let ev = HANDLE(raw as *mut core::ffi::c_void);
+        loop {
+            unsafe { let _ = WaitForSingleObject(ev, u32::MAX); }
+            on_show();
+        }
+    });
 }
 
 impl Drop for SingleInstance {
@@ -471,4 +434,25 @@ pub fn set_startup(enabled: bool, minimized: bool) -> anyhow::Result<()> {
         result?;
     }
     Ok(())
+}
+
+// Windows pointer speed is the software equivalent of a DPI boost. Restore it on
+// deactivation, shutdown, or panic; hardware sensor DPI is controlled by the mouse.
+static ORIGINAL_MOUSE_SPEED: std::sync::Mutex<Option<i32>> = std::sync::Mutex::new(None);
+pub fn boost_mouse_speed(on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETMOUSESPEED, SPI_SETMOUSESPEED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    let Ok(mut original) = ORIGINAL_MOUSE_SPEED.lock() else { return; };
+    unsafe {
+        if on && original.is_none() {
+            let mut speed: i32 = 0;
+            if SystemParametersInfoW(SPI_GETMOUSESPEED, 0, Some((&mut speed as *mut i32).cast()), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok() {
+                let boosted = (speed + 4).min(20);
+                if SystemParametersInfoW(SPI_SETMOUSESPEED, 0, Some(boosted as usize as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok() { *original = Some(speed); }
+            }
+        } else if !on {
+            if let Some(speed) = original.take() {
+                let _ = SystemParametersInfoW(SPI_SETMOUSESPEED, 0, Some(speed as usize as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
+            }
+        }
+    }
 }

@@ -45,6 +45,7 @@ pub enum Cmd {
     Preview(Part),
     /// Preview The World's sounds: 0 = time stop, 1 = resume, 2 = tick.
     TwPreview(u8),
+    ReloadSounds,
     ResetDefaults,
     Tray(TrayAction),
     Shutdown,
@@ -106,7 +107,7 @@ fn tw_plan(s: &Settings, resume: bool) -> dubs::Plan {
     let on = s.audio.enabled;
     let def = tw.dub.def();
     let available = |f: &str| theworld_file(f).is_some();
-    if resume {
+    let mut plan = if resume {
         dubs::plan(
             def.resume,
             on && tw.resume_voice,
@@ -124,7 +125,11 @@ fn tw_plan(s: &Settings, resume: bool) -> dubs::Plan {
             (dubs::GENERIC_STOP, dubs::GENERIC_STOP_IMPACT),
             &available,
         )
+    };
+    if !resume && tw.windups[tw.dub.index() as usize] >= 0.0 {
+        plan.moment = tw.windups[tw.dub.index() as usize];
     }
+    plan
 }
 
 const RECORD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -655,12 +660,14 @@ impl Engine {
                 self.audio.send(AudioCmd::Preview(part));
                 self.sound_report_at = Some(now + Duration::from_millis(1200));
             }
+            Cmd::ReloadSounds => { self.audio.send(AudioCmd::Reload); }
             Cmd::TwPreview(which) => {
                 let mut s = self.settings.clone();
                 s.audio.enabled = true;
                 let clips = match which {
                     0 => tw_plan(&s, false).clips,
                     1 => tw_plan(&s, true).clips,
+                    _ if s.the_world.dub == dubs::Dub::Custom => vec![(0.0, dubs::Clip::new("custom_tick.mp3", 0.0, 3600.0))],
                     _ => vec![(0.0, dubs::TICK)],
                 };
                 if clips.is_empty() {
@@ -784,6 +791,7 @@ impl Engine {
             .unwrap_or(Vec2::ZERO);
         match tr {
             Transition::Activated => {
+                native::boost_mouse_speed(self.settings.mouse_boost);
                 self.ensure_overlay();
                 self.tracker.push(pos, now, false);
                 self.frames_since_activation = 0;
@@ -819,6 +827,7 @@ impl Engine {
                 self.next_frame = now;
             }
             Transition::Deactivated => {
+                native::boost_mouse_speed(false);
                 self.effects.deactivate(pos, now);
                 self.auto_end_at = None;
                 self.audio.send(AudioCmd::End {
@@ -828,6 +837,7 @@ impl Engine {
                 self.natural_end = false;
             }
             Transition::Overheated => {
+                native::boost_mouse_speed(false);
                 self.effects.deactivate(pos, now);
                 self.auto_end_at = None;
                 self.full_track = false;
@@ -862,6 +872,7 @@ impl Engine {
         let was_active = self.machine.is_active();
         self.tw_force_end(now, false);
         self.machine.emergency_stop();
+        native::boost_mouse_speed(false);
         self.set_cursor_lock(false);
         self.settings.master_enabled = false;
         self.effects.clear();
@@ -892,6 +903,9 @@ impl Engine {
         let t = &self.settings.the_world;
         let reduced = self.settings.performance.performance_mode;
         TwOptions {
+            dub: t.dub,
+            custom_primary: crate::settings::presets::parse_hex(&t.custom_primary).unwrap_or([0.91, 0.36, 1.0]),
+            custom_secondary: crate::settings::presets::parse_hex(&t.custom_secondary).unwrap_or([0.38, 0.22, 0.78]),
             mode: t.mode,
             duration: f32::from(t.duration_secs),
             max_secs: t.max_secs as f32,
@@ -979,6 +993,9 @@ impl Engine {
         if !plan.clips.is_empty() {
             self.audio.send(AudioCmd::TwPlay(plan.clips.clone()));
         }
+        if let Some(p) = native::cursor_pos() {
+            self.tw.drag_to(p, now);
+        }
         self.tw.request_resume(now, plan.moment);
         let hwnd = self.overlay.as_ref().map(|o| o.hwnd_raw()).unwrap_or(0);
         self.watchdog.arm(
@@ -1001,7 +1018,9 @@ impl Engine {
                 TwEvent::Freeze => self.tw_freeze(now),
                 TwEvent::Tick(_) => {
                     if self.settings.audio.enabled && self.settings.the_world.ticks {
-                        self.audio.send(AudioCmd::TwTick);
+                        if self.settings.the_world.dub == dubs::Dub::Custom {
+                            self.audio.send(AudioCmd::TwPlay(vec![(0.0, dubs::Clip::new("custom_tick.mp3", 0.0, 3600.0))]));
+                        } else { self.audio.send(AudioCmd::TwTick); }
                     }
                 }
                 TwEvent::AutoResume => self.tw_resume(now),
@@ -1053,7 +1072,11 @@ impl Engine {
 
     /// Time starts again: move the windows, show the live desktop, give input back.
     fn tw_unfreeze(&mut self, now: Instant, apply: bool) {
-        let moves = self.tw.pending_moves();
+        if apply {
+            if let Some(p) = native::cursor_pos() { self.tw.drag_to(p, now); }
+            self.tw.release();
+        }
+        let moves = self.tw.move_targets();
         // Input first: never keep the desktop blocked longer than necessary.
         self.hooks.time_stopped.store(false, Ordering::Release);
         self.watchdog.arm(None, 0);
@@ -1667,6 +1690,8 @@ pub fn demo_shots(
                     tint: 1.0,
                     chroma: 0.0,
                     pinch: 0.0,
+                    primary: crate::effects::the_world::palette(crate::audio::dubs::Dub::DioJp).0,
+                    secondary: crate::effects::the_world::palette(crate::audio::dubs::Dub::DioJp).1,
                 },
             )
         });

@@ -19,6 +19,7 @@ use glam::Vec2;
 use super::rays::Rays;
 use super::{Batch, Config, Look, RibbonPoint, Rng, World, mix};
 use crate::overlay::renderer::Crop;
+use crate::audio::dubs::Dub;
 use crate::platform::wm::{WinInfo, WinRect};
 use crate::settings::config::TimeStopMode;
 use crate::settings::presets::Rgb;
@@ -27,6 +28,15 @@ const STOP_ANIM: f32 = 1.25;
 const RESUME_ANIM: f32 = 0.85;
 const GOLD: Rgb = [1.0, 0.80, 0.36];
 const VIOLET: Rgb = [0.66, 0.55, 0.98];
+
+pub fn palette(dub: Dub) -> (Rgb, Rgb) {
+    match dub {
+        Dub::OverHeaven => ([0.96, 0.98, 1.0], [0.68, 0.78, 0.92]),
+        Dub::JotaroJp | Dub::JotaroEn => ([0.22, 0.58, 1.0], [0.12, 0.25, 0.72]),
+        Dub::Diego => ([1.0, 0.64, 0.12], [0.72, 0.38, 0.06]),
+        _ => (GOLD, VIOLET),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -60,6 +70,9 @@ pub enum TwEvent {
 /// Visual / behaviour options for one time stop.
 #[derive(Clone, Copy, Debug)]
 pub struct TwOptions {
+    pub dub: Dub,
+    pub custom_primary: Rgb,
+    pub custom_secondary: Rgb,
     pub mode: TimeStopMode,
     pub duration: f32,
     pub max_secs: f32,
@@ -77,6 +90,9 @@ pub struct TwOptions {
 impl Default for TwOptions {
     fn default() -> Self {
         Self {
+            dub: Dub::DioJp,
+            custom_primary: [0.91, 0.36, 1.0],
+            custom_secondary: [0.38, 0.22, 0.78],
             mode: TimeStopMode::Toggle,
             duration: 5.0,
             max_secs: 300.0,
@@ -169,6 +185,10 @@ impl TimeStop {
         }
     }
 
+    fn colors(&self) -> (Rgb, Rgb) {
+        if self.opts.dub == Dub::Custom { (self.opts.custom_primary, self.opts.custom_secondary) } else { palette(self.opts.dub) }
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }
@@ -229,7 +249,8 @@ impl TimeStop {
         self.set_phase(Phase::Stopping, now);
         if self.opts.rays {
             let mut c = cfg.clone();
-            c.style.palette = [GOLD, VIOLET, [1.0, 0.95, 0.8], GOLD, VIOLET, [1.0, 0.7, 0.3]];
+            let (primary, secondary) = self.colors();
+            c.style.palette = [primary, secondary, mix(primary, [1.0; 3], 0.65), primary, secondary, primary];
             self.rays
                 .spawn(self.center, now, 26, 520.0, 0.7, Vec2::ZERO, &c, &mut self.rng);
         }
@@ -277,6 +298,13 @@ impl TimeStop {
             .iter()
             .filter_map(|m| self.windows.get(m.win).map(|w| (w.hwnd, m.dx, m.dy)))
             .collect()
+    }
+
+    /// Final visible-frame positions are based on the frozen snapshot, even if an
+    /// application moves its real window while the desktop image is frozen.
+    pub fn move_targets(&self) -> Vec<(isize, WinRect)> {
+        self.moves.iter().filter_map(|m| self.windows.get(m.win)
+            .map(|w| (w.hwnd, w.rect.offset(m.dx, m.dy)))).collect()
     }
 
     /// Seconds since time stopped.
@@ -458,6 +486,8 @@ impl TimeStop {
                 tint,
                 chroma,
                 pinch: 0.0,
+                primary: self.colors().0,
+                secondary: self.colors().1,
             },
         };
         let no_ripple = (self.center, 0.0, 0.0);
@@ -484,6 +514,8 @@ impl TimeStop {
                     flash: 0.0,
                     tint,
                     chroma,
+                    primary: self.colors().0,
+                    secondary: self.colors().1,
                     pinch: if self.opts.flare {
                         smooth(0.78, 1.0, k)
                     } else {
@@ -560,6 +592,28 @@ impl TimeStop {
             .sum()
     }
 
+    // Only copy pixels belonging to this window: higher windows cover parts of the
+    // desktop capture and must never be carried along with a lower window.
+    fn visible_pieces(&self, index: usize) -> Vec<WinRect> {
+        let mut pieces = vec![self.windows[index].rect];
+        for cover in self.windows.iter().take(index).map(|w| w.rect) {
+            let mut next = Vec::new();
+            for r in pieces {
+                let l = r.l.max(cover.l); let t = r.t.max(cover.t);
+                let right = r.r.min(cover.r); let bottom = r.b.min(cover.b);
+                if l >= right || t >= bottom { next.push(r); continue; }
+                for part in [WinRect { l: r.l, t: r.t, r: r.r, b: t },
+                             WinRect { l: r.l, t: bottom, r: r.r, b: r.b },
+                             WinRect { l: r.l, t, r: l, b: bottom },
+                             WinRect { l: right, t, r: r.r, b: bottom }] {
+                    if part.w() > 0.0 && part.h() > 0.0 { next.push(part); }
+                }
+            }
+            pieces = next;
+        }
+        pieces
+    }
+
     /// Frozen-image pieces: vacated spots and the windows at their new places.
     pub fn crops(&self, now: Instant) -> Vec<Crop> {
         if !matches!(
@@ -599,24 +653,18 @@ impl TimeStop {
             if Some(m.win) == dragging {
                 continue;
             }
-            if let Some(w) = self.windows.get(m.win) {
-                out.push(Crop {
-                    src: Some(r4(w.rect)),
-                    dst: r4(w.rect.offset(m.dx, m.dy)),
-                    alpha: 1.0,
-                    fill: [0.0; 4],
-                });
+            if self.windows.get(m.win).is_some() {
+                for piece in self.visible_pieces(m.win) {
+                    out.push(Crop { src: Some(r4(piece)), dst: r4(piece.offset(m.dx, m.dy)), alpha: 1.0, fill: [0.0; 4] });
+                }
             }
         }
         if let Some(d) = self.drag.as_ref() {
-            if let Some(w) = self.windows.get(d.win) {
+            if self.windows.get(d.win).is_some() {
                 let off = d.base + (d.cur - d.start);
-                out.push(Crop {
-                    src: Some(r4(w.rect)),
-                    dst: r4(w.rect.offset(off.x, off.y)),
-                    alpha: 0.9,
-                    fill: [0.0; 4],
-                });
+                for piece in self.visible_pieces(d.win) {
+                    out.push(Crop { src: Some(r4(piece)), dst: r4(piece.offset(off.x, off.y)), alpha: 0.95, fill: [0.0; 4] });
+                }
             }
         }
         out
@@ -650,8 +698,8 @@ impl TimeStop {
         }
     }
 
-    /// Seven-segment digits (no font needed), top-right of the monitor.
-    fn draw_digits(batch: &mut Batch, text: &str, right: Vec2, h: f32, c: Rgb, a: f32) {
+    /// Character-specific display lettering drawn directly into the overlay.
+    fn draw_digits(batch: &mut Batch, text: &str, right: Vec2, h: f32, c: Rgb, a: f32, dub: Dub) {
         // Segments: a b c d e f g as (x0,y0,x1,y1) in a 0..1 x 0..2 box.
         const SEG: [(f32, f32, f32, f32); 7] = [
             (0.0, 0.0, 1.0, 0.0),
@@ -685,7 +733,7 @@ impl TimeStop {
             .sum();
         let mut x = right.x - width;
         let y = right.y;
-        let hw = (h * 0.055).max(1.5);
+        let hw = (h * match dub { Dub::OverHeaven => 0.035, Dub::Diego => 0.085, Dub::JotaroJp | Dub::JotaroEn => 0.065, _ => 0.055 }).max(1.5);
         for ch in text.chars() {
             if ch == '.' {
                 batch.disc_sharp(Vec2::new(x + unit * 0.1, y + h), hw * 2.2, c, a, 0.8, 6.0);
@@ -697,8 +745,9 @@ impl TimeStop {
                 if m & (1 << i) == 0 {
                     continue;
                 }
-                let p0 = Vec2::new(x + s.0 * unit, y + s.1 * unit);
-                let p1 = Vec2::new(x + s.2 * unit, y + s.3 * unit);
+                let slant = match dub { Dub::JotaroJp | Dub::JotaroEn => 0.17, Dub::Diego => -0.12, _ => 0.0 };
+                let p0 = Vec2::new(x + (s.0 + slant * (2.0 - s.1)) * unit, y + s.1 * unit);
+                let p1 = Vec2::new(x + (s.2 + slant * (2.0 - s.3)) * unit, y + s.3 * unit);
                 let inset = (p1 - p0).normalize_or_zero() * hw * 0.9;
                 let line = |w: f32, al: f32| {
                     [
@@ -724,7 +773,7 @@ impl TimeStop {
     /// Energy being drawn into the stand: thin golden streaks fly inwards from every
     /// direction, more and faster as the voice line builds, then an anamorphic lens flare
     /// flashes across the cursor the instant before time stops.
-    fn draw_gathering(batch: &mut Batch, p: Vec2, t: f32, k: f32, cfg: &Config, streaks: bool, flare: bool) {
+    fn draw_gathering(batch: &mut Batch, p: Vec2, t: f32, k: f32, cfg: &Config, streaks: bool, flare: bool, primary: Rgb, secondary: Rgb) {
         let hash = |i: u32, salt: u32| -> f32 {
             let mut x = i.wrapping_mul(0x9E37_79B9) ^ salt.wrapping_mul(0x85EB_CA6B);
             x ^= x >> 15;
@@ -749,9 +798,9 @@ impl TimeStop {
             let tail = p + dir * (r + len);
             let w = 0.8 + 0.9 * hash(i, 5);
             let col = if hash(i, 6) > 0.7 {
-                VIOLET
+                secondary
             } else {
-                mix(GOLD, [1.0, 1.0, 1.0], 0.35 * hash(i, 7))
+                mix(primary, [1.0, 1.0, 1.0], 0.35 * hash(i, 7))
             };
             let pts = [
                 RibbonPoint {
@@ -789,13 +838,14 @@ impl TimeStop {
                         alpha: 0.0,
                     },
                 ];
-                batch.ribbon(&pts, cfg.hot([1.0, 0.9, 0.7], heat), 1.0);
+                batch.ribbon(&pts, cfg.hot(mix(primary, [1.0; 3], 0.25), heat), 1.0);
             }
-            batch.disc_sharp(p, 9.0 + 6.0 * f, cfg.hot([1.0, 0.96, 0.85], 2.5), f, 1.0, 14.0);
+            batch.disc_sharp(p, 9.0 + 6.0 * f, cfg.hot(mix(primary, [1.0; 3], 0.65), 2.5), f, 1.0, 14.0);
         }
     }
 
     pub fn draw(&mut self, batch: &mut Batch, now: Instant, cfg: &Config, cursor: Option<Vec2>) {
+        let (primary, secondary) = self.colors();
         let t = now.saturating_duration_since(self.phase_at).as_secs_f32();
         match self.phase {
             Phase::Charging => {
@@ -808,7 +858,7 @@ impl TimeStop {
                 let k = (t / total).clamp(0.0, 1.0);
                 let p = cursor.unwrap_or(self.center);
                 self.center = p;
-                Self::draw_gathering(batch, p, t, k, cfg, self.opts.streaks, self.opts.flare);
+                Self::draw_gathering(batch, p, t, k, cfg, self.opts.streaks, self.opts.flare, primary, secondary);
             }
             Phase::Stopping | Phase::Stopped | Phase::ResumeCharging => {
                 let fade_in = smooth(0.3, 0.9, self.frozen_secs(now));
@@ -817,11 +867,14 @@ impl TimeStop {
                     if let Some(w) = self.windows.get(d.win) {
                         let off = d.base + (d.cur - d.start);
                         let r = w.rect.offset(off.x, off.y);
-                        Self::outline(batch, r, GOLD, 0.95, 1.6, cfg);
+                        Self::outline(batch, r, primary, 0.95, match self.opts.dub { Dub::OverHeaven => 0.9, Dub::Diego => 2.5, Dub::JotaroJp | Dub::JotaroEn => 1.9, _ => 1.6 }, cfg);
+                        if self.opts.dub == Dub::OverHeaven {
+                            Self::outline(batch, r.offset(5.0, -5.0), secondary, 0.32, 0.7, cfg);
+                        }
                         // Motion streaks trailing behind the corners.
                         if let (Some(first), Some(last)) = (d.trail.first(), d.trail.last()) {
                             let v = last.0 - first.0;
-                            if v.length() > 8.0 {
+                            if v.length() > 8.0 && self.opts.dub != Dub::OverHeaven {
                                 for c in [
                                     Vec2::new(r.l, r.t),
                                     Vec2::new(r.r, r.t),
@@ -842,7 +895,7 @@ impl TimeStop {
                                             alpha: 0.7,
                                         },
                                     ];
-                                    batch.ribbon(&pts, cfg.hot(GOLD, 1.4), 1.0);
+                                    batch.ribbon(&pts, cfg.hot(if self.opts.dub == Dub::Diego { secondary } else { primary }, 1.4), 1.0);
                                 }
                             }
                         }
@@ -850,7 +903,7 @@ impl TimeStop {
                 } else if let Some(h) = self.hover {
                     if let Some(w) = self.windows.get(h) {
                         let off = self.offset_of(h);
-                        Self::outline(batch, w.rect.offset(off.x, off.y), GOLD, 0.45 * fade_in, 1.0, cfg);
+                        Self::outline(batch, w.rect.offset(off.x, off.y), primary, 0.45 * fade_in, 1.0, cfg);
                     }
                 }
                 for m in &self.moves {
@@ -858,15 +911,15 @@ impl TimeStop {
                         continue;
                     }
                     if let Some(w) = self.windows.get(m.win) {
-                        Self::outline(batch, w.rect.offset(m.dx, m.dy), VIOLET, 0.5, 1.0, cfg);
+                        Self::outline(batch, w.rect.offset(m.dx, m.dy), secondary, 0.5, 1.0, cfg);
                     }
                 }
                 if self.opts.countdown {
                     let text = self.countdown_text(now);
                     let a = fade_in * if self.phase == Phase::ResumeCharging { 0.6 } else { 1.0 };
                     let top_right = Vec2::new(self.monitor.r - 48.0, self.monitor.t + 40.0);
-                    let col = mix(GOLD, [1.0, 1.0, 1.0], 0.15);
-                    Self::draw_digits(batch, &text, top_right, Self::DIGIT_H, cfg.hot(col, 1.6), a);
+                    let col = mix(primary, [1.0, 1.0, 1.0], 0.15);
+                    Self::draw_digits(batch, &text, top_right, Self::DIGIT_H, cfg.hot(col, 1.6), a, self.opts.dub);
                 }
             }
             Phase::Resuming | Phase::Idle => {}
@@ -912,6 +965,33 @@ mod tests {
             &cfg(),
         );
         ts
+    }
+
+    #[test]
+    fn variant_colours_reach_the_world_pass() {
+        let now = Instant::now();
+        let mut ts = stopped(now, TimeStopMode::Toggle);
+        for dub in Dub::ALL {
+            ts.opts.dub = dub;
+            let world = ts.world(now, 2000.0).unwrap();
+            match world.look {
+                Look::TimeStop { primary, secondary, .. } => {
+                    assert_eq!((primary, secondary), ts.colors());
+                }
+                _ => panic!("expected time-stop grade"),
+            }
+        }
+        assert_ne!(palette(Dub::Diego), palette(Dub::DioJp));
+        assert_eq!(palette(Dub::JotaroJp), palette(Dub::JotaroEn));
+    }
+
+    #[test]
+    fn dragged_lower_window_excludes_occluding_pixels() {
+        let now = Instant::now();
+        let ts = stopped(now, TimeStopMode::Toggle);
+        let pieces = ts.visible_pieces(1);
+        assert!(pieces.iter().all(|r| !r.contains(300.0, 200.0)));
+        assert!(pieces.iter().any(|r| r.contains(500.0, 400.0)));
     }
 
     #[test]
@@ -975,6 +1055,7 @@ mod tests {
         ts.drag_to(Vec2::new(800.0, 900.0), t0);
         assert!(ts.release());
         assert_eq!(ts.pending_moves(), vec![(1, 500.0, 700.0)]);
+        assert_eq!(ts.move_targets(), vec![(1, WinRect { l: 500.0, t: 700.0, r: 900.0, b: 1000.0 })]);
         // Dragging the same window again accumulates into one move.
         assert!(ts.grab(Vec2::new(810.0, 910.0), t0));
         ts.drag_to(Vec2::new(710.0, 910.0), t0);

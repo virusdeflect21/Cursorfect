@@ -113,7 +113,7 @@ component EffectChip inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "CursorFect";
+    title: "CursorFects";
     preferred-width: 500px;
     preferred-height: 720px;
     min-width: 400px;
@@ -125,6 +125,7 @@ export component MainWindow inherits Window {
     in property <string> version: "";
 
     in-out property <bool> master-on: false;
+    in-out property <bool> mouse-boost: false;
     in property <string> activation-text: "Middle Click";
     in property <string> dash-text: "Ctrl + Middle Click";
     in property <int> recording: 0;
@@ -143,6 +144,9 @@ export component MainWindow inherits Window {
     in-out property <int> tw-mode: 1;
     in-out property <float> tw-duration: 5;
     in-out property <int> tw-dub: 0;
+    in-out property <float> tw-windup: -1;
+    in-out property <string> tw-custom-primary: "#E95BFF";
+    in-out property <string> tw-custom-secondary: "#6037C8";
     in-out property <bool> tw-voice: true;
     in-out property <bool> tw-sfx: true;
     in-out property <bool> tw-ticks: true;
@@ -161,8 +165,8 @@ export component MainWindow inherits Window {
     in-out property <bool> fx-ripples: true;
     in-out property <bool> fx-glitch: true;
     in-out property <bool> fx-bursts: true;
-    property <color> accent: root.effect == 1 ? root.gold : root.primary-color;
-    property <color> accent2: root.effect == 1 ? root.violet : root.secondary-color;
+    property <color> accent: root.effect == 1 ? (root.tw-dub == 4 ? #F4F9FF : root.tw-dub == 1 || root.tw-dub == 2 ? #398EFF : root.tw-dub == 3 ? #FFA323 : root.gold) : root.primary-color;
+    property <color> accent2: root.effect == 1 ? (root.tw-dub == 4 ? #9FB7DE : root.tw-dub == 1 || root.tw-dub == 2 ? #243DAD : root.tw-dub == 3 ? #B9580C : root.violet) : root.secondary-color;
     in-out property <bool> fx-ghosts: true;
     in-out property <bool> fx-trails: true;
     in-out property <bool> fx-glow: true;
@@ -206,6 +210,7 @@ export component MainWindow inherits Window {
     callback reset-defaults();
     callback minimize-tray();
     callback open-sounds();
+    callback choose-custom-sound(int);
 
     ScrollView {
         VerticalLayout {
@@ -217,7 +222,7 @@ export component MainWindow inherits Window {
                 height: 78px;
                 border-radius: 10px;
                 background: root.effect == 1
-                    ? @linear-gradient(120deg, #101014 0%, #1B1B23 55%, #2A2140 100%)
+                    ? @linear-gradient(120deg, #101014 0%, root.accent2.with-alpha(0.28) 55%, root.accent.with-alpha(0.30) 100%)
                     : @linear-gradient(120deg, #0B0F17 0%, #10202B 55%, #0E2A24 100%);
                 // Accent line in the current preset colours.
                 Rectangle {
@@ -244,7 +249,7 @@ export component MainWindow inherits Window {
                                 color: #FFFFFF;
                             }
                             Text {
-                                text: "Fect";
+                                text: "Fects";
                                 font-size: 24px;
                                 font-weight: 800;
                                 color: root.accent;
@@ -295,7 +300,7 @@ export component MainWindow inherits Window {
 
             // ---- Effect picker (more effects will appear here)
             GroupBox {
-                title: "Effect";
+                title: "✦ Effect";
                 HorizontalLayout {
                     spacing: 8px;
                     EffectChip {
@@ -312,7 +317,7 @@ export component MainWindow inherits Window {
                         title: "The World";
                         subtitle: "Stop time, move windows";
                         selected: root.effect == 1;
-                        accent: root.gold;
+                        accent: root.accent;
                         clicked => {
                             root.effect = 1;
                             root.changed();
@@ -375,7 +380,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "Sound";
+                title: "♫ Sound";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
@@ -504,7 +509,7 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         ComboBox {
-                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)"];
+                            model: ["DIO (Japanese)", "Jotaro \u{2014} Star Platinum (Japanese)", "Jotaro \u{2014} Star Platinum (English dub)", "Diego Brando (Steel Ball Run)", "DIO \u{2014} The World Over Heaven", "No voice (sound effects only)", "Custom time stop"];
                             current-index <=> root.tw-dub;
                             selected(v) => {
                                 root.changed();
@@ -597,7 +602,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 1: GroupBox {
-                title: "Time stop";
+                title: "◷ Time stop";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -614,6 +619,31 @@ export component MainWindow inherits Window {
                                 root.changed();
                             }
                         }
+                    }
+                    SliderRow {
+                        label: "Wind-up (-1 = automatic)";
+                        suffix: " s";
+                        minimum: -1;
+                        maximum: 15;
+                        value <=> root.tw-windup;
+                        edited => { root.changed(); }
+                    }
+                    if root.tw-dub == 6: VerticalLayout {
+                        spacing: 6px;
+                        Text { text: "Custom colors (#RRGGBB)"; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            LineEdit { text <=> root.tw-custom-primary; edited(t) => { root.changed(); } }
+                            LineEdit { text <=> root.tw-custom-secondary; edited(t) => { root.changed(); } }
+                        }
+                        Text { text: "Choose MP3 sounds from your PC:"; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "♪ Stop sound"; clicked => { root.choose-custom-sound(0); } }
+                            Button { text: "◷ Tick sound"; clicked => { root.choose-custom-sound(1); } }
+                            Button { text: "▶ Resume sound"; clicked => { root.choose-custom-sound(2); } }
+                        }
+                        Text { text: "Selected files are copied to your sounds folder and loaded immediately."; wrap: word-wrap; opacity: 0.65; }
                     }
                     if root.tw-mode == 2: SliderRow {
                         label: "Duration";
@@ -725,7 +755,7 @@ export component MainWindow inherits Window {
             }
 
             if root.effect == 0: GroupBox {
-                title: "Look";
+                title: "✦ Look";
                 VerticalLayout {
                     spacing: 8px;
                     HorizontalLayout {
@@ -865,6 +895,11 @@ export component MainWindow inherits Window {
                             root.changed();
                         }
                     }
+                    Switch {
+                        text: "Boost mouse pointer speed while active";
+                        checked <=> root.mouse-boost;
+                        toggled => { root.changed(); }
+                    }
                     SliderRow {
                         label: "Intensity";
                         value <=> root.intensity;
@@ -935,7 +970,7 @@ export component MainWindow inherits Window {
             }
 
             GroupBox {
-                title: "System";
+                title: "⚙ System";
                 VerticalLayout {
                     spacing: 8px;
                     Switch {
